@@ -9,7 +9,10 @@ No external simulator needed. VantaFlight ships with a built-in mock
 adapter that simulates basic flight behavior:
 
 ```bash
+# Terminal 1: start the backend
 cd backend && uvicorn vantaflight.main:app --reload
+
+# Terminal 2: start the frontend
 cd frontend && npm run dev
 ```
 
