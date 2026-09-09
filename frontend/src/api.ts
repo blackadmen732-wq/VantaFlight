@@ -1,7 +1,14 @@
-// Thin client for the local Flight Core. Commands go over REST; telemetry and
-// events stream over a WebSocket.
-
-import type { CommandResult, WsFrame } from "./types";
+import type {
+  AdapterType,
+  Capabilities,
+  CommandResult,
+  Diagnostics,
+  DiscoveredDrone,
+  HealthResponse,
+  RunSummary,
+  TwinState,
+  WsFrame,
+} from "./types";
 
 async function post(path: string, body?: unknown): Promise<CommandResult> {
   const res = await fetch(path, {
@@ -12,8 +19,14 @@ async function post(path: string, body?: unknown): Promise<CommandResult> {
   return (await res.json()) as CommandResult;
 }
 
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(path);
+  return (await res.json()) as T;
+}
+
 export const api = {
-  connect: () => post("/api/connect"),
+  connect: (adapterType?: AdapterType) =>
+    post("/api/connect", adapterType ? { adapter_type: adapterType } : undefined),
   disconnect: () => post("/api/disconnect"),
   arm: () => post("/api/arm"),
   disarm: () => post("/api/disarm"),
@@ -21,12 +34,15 @@ export const api = {
     post("/api/takeoff", { target_altitude_m: targetAltitudeM }),
   hold: () => post("/api/hold"),
   land: () => post("/api/land"),
+
+  health: () => get<HealthResponse>("/api/health"),
+  discover: () => get<{ drones: DiscoveredDrone[] }>("/api/discover"),
+  capabilities: () => get<Capabilities>("/api/capabilities"),
+  twin: () => get<TwinState>("/api/twin"),
+  runSummary: () => get<RunSummary>("/api/run-summary"),
+  diagnostics: () => get<Diagnostics>("/api/diagnostics"),
 };
 
-/**
- * Open a resilient telemetry stream. Reconnects automatically if the socket
- * drops, so a backend restart or transient loss recovers on its own.
- */
 export function openTelemetryStream(
   onFrame: (frame: WsFrame) => void,
   onStatus: (online: boolean) => void,
@@ -34,6 +50,7 @@ export function openTelemetryStream(
   let socket: WebSocket | null = null;
   let closed = false;
   let retry: ReturnType<typeof setTimeout> | null = null;
+  let backoff = 1000;
 
   const url = () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -42,7 +59,10 @@ export function openTelemetryStream(
 
   const connect = () => {
     socket = new WebSocket(url());
-    socket.onopen = () => onStatus(true);
+    socket.onopen = () => {
+      onStatus(true);
+      backoff = 1000;
+    };
     socket.onmessage = (ev) => {
       try {
         onFrame(JSON.parse(ev.data) as WsFrame);
@@ -52,7 +72,10 @@ export function openTelemetryStream(
     };
     socket.onclose = () => {
       onStatus(false);
-      if (!closed) retry = setTimeout(connect, 1000);
+      if (!closed) {
+        retry = setTimeout(connect, backoff);
+        backoff = Math.min(backoff * 1.5, 8000);
+      }
     };
     socket.onerror = () => socket?.close();
   };

@@ -1,6 +1,6 @@
 [project]
 name = "vantaflight"
-version = "0.1.0"
+version = "0.3.0"
 description = "VantaFlight Flight Core - local-first autonomous drone platform"
 requires-python = ">=3.10"
 
