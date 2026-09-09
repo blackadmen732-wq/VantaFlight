@@ -2,9 +2,11 @@
 
 ## Scope
 
-VantaFlight V0.3 operates exclusively in simulation. There is no support
-for physical drone control, and no path from this software to commanding
-a real aircraft.
+VantaFlight V0.3 is intended exclusively for simulation. While the PX4
+adapter connects through MAVSDK with a configurable endpoint URL, only
+SITL (Software-In-The-Loop) use is supported and tested. Operators must
+ensure the configured MAVLink endpoint points to a simulator, not a
+physical vehicle. No safety interlocks for real hardware are implemented.
 
 ## Safety Boundaries
 

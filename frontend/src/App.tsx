@@ -60,13 +60,15 @@ function FlightDashboard() {
   };
 
   const handleConnect = async () => {
-    setRunSummary(null);
-    return api.connect(adapter);
+    const result = await api.connect(adapter);
+    if (result.accepted) setRunSummary(null);
+    return result;
   };
 
   const handleDisconnect = async () => {
     const result = await api.disconnect();
     if (result.accepted) {
+      setTwin(null);
       try {
         const summary = await api.runSummary();
         if (summary && summary.duration > 0) setRunSummary(summary);

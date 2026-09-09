@@ -21,24 +21,21 @@ export default function DiagnosticsPanel({ wsConnected }: Props) {
     return () => { active = false; clearInterval(id); };
   }, []);
 
+  const m = diag?.metrics;
+
   return (
     <div className="diagnostics-panel">
       <h3>Diagnostics</h3>
       <div className="diag-grid">
         <DiagItem
           label="Telemetry Hz"
-          value={diag ? diag.telemetry_hz.toFixed(1) : "--"}
-          status={diag && diag.telemetry_hz > 5 ? "good" : diag && diag.telemetry_hz > 0 ? "warn" : "bad"}
-        />
-        <DiagItem
-          label="Last Telemetry"
-          value={diag ? `${diag.last_telemetry_age.toFixed(1)}s ago` : "--"}
-          status={diag && diag.last_telemetry_age < 2 ? "good" : diag && diag.last_telemetry_age < 5 ? "warn" : "bad"}
+          value={m ? m.telemetry_hz.toFixed(1) : "--"}
+          status={m && m.telemetry_hz > 5 ? "good" : m && m.telemetry_hz > 0 ? "warn" : "bad"}
         />
         <DiagItem
           label="Cmd RTT"
-          value={diag && diag.avg_command_rtt_ms > 0 ? `${diag.avg_command_rtt_ms.toFixed(0)}ms` : "--"}
-          status={diag && diag.avg_command_rtt_ms < 200 ? "good" : "warn"}
+          value={m && m.avg_command_rtt_ms > 0 ? `${m.avg_command_rtt_ms.toFixed(0)}ms` : "--"}
+          status={m && m.avg_command_rtt_ms < 200 ? "good" : "warn"}
         />
         <DiagItem
           label="WebSocket"
@@ -52,8 +49,13 @@ export default function DiagnosticsPanel({ wsConnected }: Props) {
         />
         <DiagItem
           label="DB Write"
-          value={diag && diag.avg_db_write_ms > 0 ? `${diag.avg_db_write_ms.toFixed(1)}ms` : "--"}
-          status={diag && diag.avg_db_write_ms < 50 ? "good" : "warn"}
+          value={m && m.avg_db_write_ms > 0 ? `${m.avg_db_write_ms.toFixed(1)}ms` : "--"}
+          status={m && m.avg_db_write_ms < 50 ? "good" : "warn"}
+        />
+        <DiagItem
+          label="Adapter"
+          value={diag?.adapter ?? "None"}
+          status={diag?.adapter ? "good" : "neutral"}
         />
       </div>
     </div>

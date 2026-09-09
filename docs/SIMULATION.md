@@ -16,7 +16,7 @@ It simulates:
 
 Select "Mock" in the adapter selector or set:
 ```
-VANTAFLIGHT_DEFAULT_ADAPTER=mock
+VANTAFLIGHT_ADAPTER=mock
 ```
 
 ### 2. PX4 SITL
@@ -37,7 +37,7 @@ make px4_sitl gazebo-classic
 
 # Terminal 2: Start VantaFlight backend
 cd backend
-VANTAFLIGHT_DEFAULT_ADAPTER=px4_sitl uvicorn vantaflight.main:app --reload
+VANTAFLIGHT_ADAPTER=px4_sitl uvicorn vantaflight.main:app --reload
 
 # Terminal 3: Start VantaFlight frontend
 cd frontend
@@ -50,9 +50,9 @@ Then select "PX4 SITL" in the adapter selector and click Connect.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VANTAFLIGHT_PX4_SITL_URL` | `udpin://0.0.0.0:14540` | MAVLink endpoint |
-| `VANTAFLIGHT_PX4_CONNECTION_TIMEOUT` | `15.0` | Seconds before connection timeout |
-| `VANTAFLIGHT_DEFAULT_ADAPTER` | `mock` | Default adapter on startup |
+| `VANTAFLIGHT_PX4_URL` | `udpin://0.0.0.0:14540` | MAVLink endpoint |
+| `VANTAFLIGHT_PX4_TIMEOUT` | `15` | Seconds before connection timeout |
+| `VANTAFLIGHT_ADAPTER` | `mock` | Default adapter on startup |
 | `VANTAFLIGHT_STREAM_HZ` | `10` | Telemetry stream rate |
 
 ## Chromebook Notes

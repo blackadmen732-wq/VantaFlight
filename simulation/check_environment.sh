@@ -10,10 +10,10 @@ check() {
   local label="$1" cmd="$2"
   if command -v "$cmd" &>/dev/null; then
     printf "  [OK]   %-20s %s\n" "$label" "$(command -v "$cmd")"
-    ((OK++))
+    OK=$((OK + 1))
   else
     printf "  [MISS] %-20s not found\n" "$label"
-    ((FAIL++))
+    FAIL=$((FAIL + 1))
   fi
 }
 
@@ -21,10 +21,10 @@ optional() {
   local label="$1" cmd="$2"
   if command -v "$cmd" &>/dev/null; then
     printf "  [OK]   %-20s %s\n" "$label" "$(command -v "$cmd")"
-    ((OK++))
+    OK=$((OK + 1))
   else
     printf "  [WARN] %-20s not found (optional)\n" "$label"
-    ((WARN++))
+    WARN=$((WARN + 1))
   fi
 }
 
@@ -46,10 +46,10 @@ echo ""
 echo "Python packages:"
 if python3 -c "import fastapi" 2>/dev/null; then
   printf "  [OK]   %-20s installed\n" "FastAPI"
-  ((OK++))
+  OK=$((OK + 1))
 else
   printf "  [MISS] %-20s run: pip install -r backend/requirements.txt\n" "FastAPI"
-  ((FAIL++))
+  FAIL=$((FAIL + 1))
 fi
 
 echo ""

@@ -77,25 +77,25 @@ class MAVSDKClient:
             raise MAVSDKError("PX4_CONNECTION_TIMEOUT", str(e))
 
         try:
-            async for state in self._system.core.connection_state():
-                if state.is_connected:
-                    self._connected = True
-                    break
-                await asyncio.sleep(0.1)
-                break
-        except asyncio.TimeoutError:
+            async with asyncio.timeout(self._config.connection_timeout):
+                async for state in self._system.core.connection_state():
+                    if state.is_connected:
+                        self._connected = True
+                        break
+                    await asyncio.sleep(0.1)
+        except (asyncio.TimeoutError, TimeoutError):
             raise MAVSDKError("PX4_CONNECTION_TIMEOUT", "timed out waiting for PX4 connection")
 
-        deadline = asyncio.get_event_loop().time() + self._config.health_timeout
         health_ok = False
         try:
-            async for health in self._system.telemetry.health():
-                if health.is_global_position_ok and health.is_home_position_ok:
-                    health_ok = True
-                    break
-                if asyncio.get_event_loop().time() > deadline:
-                    break
-                await asyncio.sleep(0.5)
+            async with asyncio.timeout(self._config.health_timeout):
+                async for health in self._system.telemetry.health():
+                    if health.is_global_position_ok and health.is_home_position_ok:
+                        health_ok = True
+                        break
+                    await asyncio.sleep(0.5)
+        except (asyncio.TimeoutError, TimeoutError):
+            pass
         except Exception:
             pass
 
@@ -167,8 +167,9 @@ class MAVSDKClient:
                     self._telemetry.relative_altitude_m = pos.relative_altitude_m
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("position stream lost: %s", e)
+                self._connected = False
 
         async def _velocity():
             try:
@@ -181,8 +182,9 @@ class MAVSDKClient:
                     ) ** 0.5
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("velocity stream lost: %s", e)
+                self._connected = False
 
         async def _heading():
             try:
@@ -190,8 +192,9 @@ class MAVSDKClient:
                     self._telemetry.heading_deg = hdg.heading_deg
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("heading stream lost: %s", e)
+                self._connected = False
 
         async def _battery():
             try:
@@ -201,8 +204,9 @@ class MAVSDKClient:
                     )
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("battery stream lost: %s", e)
+                self._connected = False
 
         async def _armed():
             try:
@@ -210,8 +214,9 @@ class MAVSDKClient:
                     self._telemetry.armed = is_armed
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("armed stream lost: %s", e)
+                self._connected = False
 
         async def _in_air():
             try:
@@ -219,8 +224,9 @@ class MAVSDKClient:
                     self._telemetry.in_air = in_air
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("in_air stream lost: %s", e)
+                self._connected = False
 
         async def _flight_mode():
             try:
@@ -228,8 +234,9 @@ class MAVSDKClient:
                     self._telemetry.flight_mode = str(mode)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("flight_mode stream lost: %s", e)
+                self._connected = False
 
         tasks = [
             asyncio.create_task(fn())

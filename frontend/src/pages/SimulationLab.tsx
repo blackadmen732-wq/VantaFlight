@@ -13,7 +13,7 @@ export default function SimulationLab({ wsConnected }: Props) {
 
   useEffect(() => {
     api.discover().then((r) => setDrones(r.drones)).catch(() => {});
-    api.capabilities().then(setCaps).catch(() => {});
+    api.capabilities().then((c) => { if (c) setCaps(c); }).catch(() => {});
   }, []);
 
   return (
@@ -29,11 +29,13 @@ export default function SimulationLab({ wsConnected }: Props) {
                 <span className="adapter-name">{d.name}</span>
                 <span className="adapter-transport">{d.transport}</span>
               </div>
-              <div className="adapter-caps">
-                {d.capabilities.map((c) => (
-                  <span key={c} className="cap-tag">{c}</span>
-                ))}
-              </div>
+              {d.capabilities && d.capabilities.length > 0 && (
+                <div className="adapter-caps">
+                  {d.capabilities.map((c) => (
+                    <span key={c} className="cap-tag">{c}</span>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           {drones.length === 0 && <p className="empty">Discovering adapters...</p>}

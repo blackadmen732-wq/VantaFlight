@@ -44,7 +44,7 @@ pip install mavsdk
 
 Set the environment variable for PX4 mode:
 ```bash
-export VANTAFLIGHT_PX4_SITL_URL=udpin://0.0.0.0:14540
+export VANTAFLIGHT_PX4_URL=udpin://0.0.0.0:14540
 ```
 
 Or use the adapter selector in the dashboard.

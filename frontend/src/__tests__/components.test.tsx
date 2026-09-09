@@ -84,8 +84,8 @@ describe("AdapterSelector", () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       json: () => Promise.resolve({
         drones: [
-          { name: "Mock Drone", adapter_type: "mock", transport: "SIMULATED", capabilities: ["arm"] },
-          { name: "PX4 SITL", adapter_type: "px4_sitl", transport: "PX4_SITL", capabilities: ["arm", "gps"] },
+          { drone_id: "mock-0", name: "Mock Drone", adapter_type: "mock", transport: "SIMULATED", address: "in-process", capabilities: ["arm"] },
+          { drone_id: "px4-0", name: "PX4 SITL", adapter_type: "px4_sitl", transport: "PX4_SITL", address: "udpin://0.0.0.0:14540", capabilities: ["arm", "gps"] },
         ],
       }),
     }) as unknown as typeof globalThis.fetch;

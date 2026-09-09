@@ -48,10 +48,12 @@ export interface CommandResult {
 }
 
 export interface DiscoveredDrone {
+  drone_id: string;
   name: string;
   adapter_type: AdapterType;
   transport: string;
-  capabilities: string[];
+  address: string;
+  capabilities?: string[];
 }
 
 export interface Capabilities {
@@ -99,13 +101,20 @@ export interface RunSummary {
   final_status: string;
 }
 
-export interface Diagnostics {
+export interface DiagnosticsMetrics {
   telemetry_hz: number;
-  last_telemetry_age: number;
   avg_command_rtt_ms: number;
   avg_db_write_ms: number;
+}
+
+export interface Diagnostics {
+  version: string;
   session_state: SessionState;
-  ws_connected: boolean;
+  flight_id: number | null;
+  ws_clients: number;
+  adapter: string | null;
+  metrics: DiagnosticsMetrics;
+  twin_active: boolean;
 }
 
 export interface HealthResponse {

@@ -37,9 +37,13 @@ export const api = {
 
   health: () => get<HealthResponse>("/api/health"),
   discover: () => get<{ drones: DiscoveredDrone[] }>("/api/discover"),
-  capabilities: () => get<Capabilities>("/api/capabilities"),
+  capabilities: () =>
+    get<{ connected: boolean; capabilities: Capabilities | null }>("/api/capabilities").then(
+      (r) => r.capabilities,
+    ),
   twin: () => get<TwinState>("/api/twin"),
-  runSummary: () => get<RunSummary>("/api/run-summary"),
+  runSummary: () =>
+    get<{ source: string; summary: RunSummary }>("/api/run-summary").then((r) => r.summary),
   diagnostics: () => get<Diagnostics>("/api/diagnostics"),
 };
 

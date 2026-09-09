@@ -75,13 +75,16 @@ class PX4SITLAdapter:
         if self._connected and self._client.connected:
             quality = ConnectionQuality.EXCELLENT if px4.health_all_ok else ConnectionQuality.GOOD
 
+        x = px4.longitude_deg if px4.longitude_deg is not None else 0.0
+        y = px4.latitude_deg if px4.latitude_deg is not None else 0.0
+
         return Telemetry(
             timestamp=time.time(),
             connected=self._connected and self._client.connected,
             armed=px4.armed,
             flight_mode=mode,
-            x=0.0,
-            y=0.0,
+            x=x,
+            y=y,
             z=px4.relative_altitude_m,
             altitude=px4.relative_altitude_m,
             latitude=px4.latitude_deg,
@@ -108,9 +111,11 @@ class PX4SITLAdapter:
 
     @staticmethod
     def _map_flight_mode(px4_mode: str, in_air: bool) -> FlightMode:
-        upper = px4_mode.upper().replace(" ", "_")
-        if upper in _PX4_MODE_MAP:
-            return _PX4_MODE_MAP[upper]
+        raw = px4_mode.upper().replace(" ", "_")
+        if "." in raw:
+            raw = raw.rsplit(".", 1)[-1]
+        if raw in _PX4_MODE_MAP:
+            return _PX4_MODE_MAP[raw]
         if in_air:
             return FlightMode.HOLD
         return FlightMode.IDLE

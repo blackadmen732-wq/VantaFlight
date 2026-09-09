@@ -10,7 +10,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .config import CORS_ORIGINS, DB_PATH, STREAM_HZ, SOFTWARE_VERSION
+from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_VERSION
 from .connection import ConnectionManager, DiscoveredDrone
 from .core import FlightController
 from .data import FlightDatabase
@@ -22,7 +22,7 @@ class TakeoffRequest(BaseModel):
 
 
 class ConnectRequest(BaseModel):
-    adapter_type: str = "mock"
+    adapter_type: str = DEFAULT_ADAPTER
 
 
 class ConnectionHub:
