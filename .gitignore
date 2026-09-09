@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+backend/.venv/
+.pytest_cache/
+*.egg-info/
+
+# Local databases
+*.db
+*.db-wal
+*.db-shm
+vantaflight.db*
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Tauri / Rust
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

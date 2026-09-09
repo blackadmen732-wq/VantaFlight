@@ -1,0 +1,14 @@
+{
+  "name": "VantaFlight",
+  "install": "bash scripts/install.sh",
+  "terminals": [
+    {
+      "name": "flight-core",
+      "command": "cd backend && . .venv/bin/activate && python -m uvicorn vantaflight.main:app --host 127.0.0.1 --port 8000"
+    },
+    {
+      "name": "desktop-ui",
+      "command": "cd frontend && npm run dev"
+    }
+  ]
+}
