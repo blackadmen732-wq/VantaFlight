@@ -24,7 +24,9 @@ def test_health(client: TestClient):
 
 def test_discover(client: TestClient):
     drones = client.get("/api/discover").json()["drones"]
-    assert len(drones) == 1
+    assert len(drones) >= 1
+    types = {d["adapter_type"] for d in drones}
+    assert "mock" in types
     assert drones[0]["transport"] == "SIMULATED"
 
 

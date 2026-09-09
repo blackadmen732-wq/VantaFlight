@@ -1,10 +1,4 @@
-"""Local-first persistence.
-
-Every simulated run is stored locally in SQLite (WAL mode for concurrent
-read/write). No cloud, no network. Four tables capture a flight: the flight
-itself, its telemetry samples, its timeline events, and the commands issued
-(including safety rejections and errors).
-"""
+"""Local-first persistence with schema migration."""
 from __future__ import annotations
 
 import sqlite3
@@ -13,7 +7,7 @@ from pathlib import Path
 
 from ..models import CommandResult, FlightEvent, Telemetry
 
-SCHEMA = """
+SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS flights (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at  REAL NOT NULL,
@@ -62,27 +56,84 @@ CREATE INDEX IF NOT EXISTS idx_events_flight ON flight_events(flight_id);
 CREATE INDEX IF NOT EXISTS idx_commands_flight ON commands(flight_id);
 """
 
+MIGRATION_V2 = """
+ALTER TABLE flights ADD COLUMN adapter_type TEXT NOT NULL DEFAULT 'mock';
+ALTER TABLE flights ADD COLUMN is_simulated INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE flights ADD COLUMN software_version TEXT NOT NULL DEFAULT '0.1.0';
+ALTER TABLE flights ADD COLUMN connection_type TEXT NOT NULL DEFAULT 'SIMULATED';
+
+ALTER TABLE telemetry_samples ADD COLUMN latitude REAL;
+ALTER TABLE telemetry_samples ADD COLUMN longitude REAL;
+ALTER TABLE telemetry_samples ADD COLUMN ground_speed REAL NOT NULL DEFAULT 0.0;
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+);
+"""
+
+CURRENT_SCHEMA_VERSION = 2
+
 
 class FlightDatabase:
-    """Thin SQLite wrapper. Pass ``:memory:`` for tests."""
+    """Thin SQLite wrapper with schema migration. Pass ``:memory:`` for tests."""
 
     def __init__(self, path: str | Path = "vantaflight.db") -> None:
         self.path = str(path)
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        # WAL only applies to on-disk databases; harmless (no-op) for :memory:.
         if self.path != ":memory:":
             self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
-        self._conn.executescript(SCHEMA)
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        self._conn.executescript(SCHEMA_V1)
+        self._conn.commit()
+
+        version = self._get_schema_version()
+        if version < 2:
+            self._migrate_v2()
+
+    def _get_schema_version(self) -> int:
+        try:
+            row = self._conn.execute(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            return int(row[0]) if row else 1
+        except sqlite3.OperationalError:
+            return 1
+
+    def _migrate_v2(self) -> None:
+        for stmt in MIGRATION_V2.strip().split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass
+        self._conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
+            (CURRENT_SCHEMA_VERSION,),
+        )
         self._conn.commit()
 
     # -- flights ------------------------------------------------------------
-    def start_flight(self, drone_id: str, drone_name: str) -> int:
+    def start_flight(
+        self,
+        drone_id: str,
+        drone_name: str,
+        adapter_type: str = "mock",
+        is_simulated: bool = True,
+        connection_type: str = "SIMULATED",
+        software_version: str = "0.3.0",
+    ) -> int:
         cur = self._conn.execute(
-            "INSERT INTO flights (started_at, drone_id, drone_name, status) "
-            "VALUES (?, ?, ?, 'active')",
-            (time.time(), drone_id, drone_name),
+            "INSERT INTO flights (started_at, drone_id, drone_name, status, "
+            "adapter_type, is_simulated, connection_type, software_version) "
+            "VALUES (?, ?, ?, 'active', ?, ?, ?, ?)",
+            (time.time(), drone_id, drone_name, adapter_type,
+             int(is_simulated), connection_type, software_version),
         )
         self._conn.commit()
         return int(cur.lastrowid)
@@ -99,7 +150,8 @@ class FlightDatabase:
         self._conn.execute(
             "INSERT INTO telemetry_samples (flight_id, timestamp, connected, armed, "
             "flight_mode, x, y, z, altitude, velocity, heading, battery_percentage, "
-            "connection_quality) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "connection_quality, latitude, longitude, ground_speed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 flight_id,
                 t.timestamp,
@@ -114,6 +166,9 @@ class FlightDatabase:
                 t.heading,
                 t.battery_percentage,
                 t.connection_quality.value,
+                t.latitude,
+                t.longitude,
+                t.ground_speed,
             ),
         )
         self._conn.commit()
@@ -140,7 +195,7 @@ class FlightDatabase:
         )
         self._conn.commit()
 
-    # -- reads (used by tests, replay later) --------------------------------
+    # -- reads --------------------------------------------------------------
     def count_telemetry(self, flight_id: int) -> int:
         row = self._conn.execute(
             "SELECT COUNT(*) AS n FROM telemetry_samples WHERE flight_id = ?",
@@ -169,6 +224,42 @@ class FlightDatabase:
             "SELECT * FROM flights WHERE id = ?", (flight_id,)
         ).fetchone()
         return dict(row) if row else None
+
+    def get_run_summary(self, flight_id: int) -> dict | None:
+        flight = self.get_flight(flight_id)
+        if not flight:
+            return None
+        samples = self._conn.execute(
+            "SELECT altitude, velocity, battery_percentage FROM telemetry_samples "
+            "WHERE flight_id = ? ORDER BY id",
+            (flight_id,),
+        ).fetchall()
+        commands = self.get_commands(flight_id)
+        events = self.get_events(flight_id)
+
+        max_alt = max((s["altitude"] for s in samples), default=0.0)
+        max_speed = max((abs(s["velocity"]) for s in samples), default=0.0)
+        bat_start = samples[0]["battery_percentage"] if samples else 100.0
+        bat_end = samples[-1]["battery_percentage"] if samples else 100.0
+        interruptions = sum(1 for e in events if e["event_type"] == "connection_lost")
+
+        duration = 0.0
+        if flight["ended_at"] and flight["started_at"]:
+            duration = flight["ended_at"] - flight["started_at"]
+
+        return {
+            "flight_id": flight_id,
+            "duration": round(duration, 1),
+            "max_altitude": round(max_alt, 2),
+            "max_speed": round(max_speed, 2),
+            "battery_start": round(bat_start, 1),
+            "battery_end": round(bat_end, 1),
+            "command_count": len(commands),
+            "connection_interruptions": interruptions,
+            "final_status": flight["status"],
+            "adapter_type": flight.get("adapter_type", "unknown"),
+            "is_simulated": bool(flight.get("is_simulated", True)),
+        }
 
     def journal_mode(self) -> str:
         row = self._conn.execute("PRAGMA journal_mode;").fetchone()

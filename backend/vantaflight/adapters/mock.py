@@ -125,7 +125,16 @@ class MockDroneAdapter:
         )
 
     def get_capabilities(self) -> Capabilities:
-        return Capabilities(name="Mock Drone (Simulator)", is_simulated=True)
+        return Capabilities(
+            name="Mock Drone (Simulator)",
+            adapter_type="mock",
+            is_simulated=True,
+            supports_gps=False,
+            supported_capabilities=[
+                "arm", "takeoff", "land", "hold",
+                "position", "velocity", "heading", "battery", "simulation",
+            ],
+        )
 
     # -- physics ------------------------------------------------------------
     def _tick(self) -> None:

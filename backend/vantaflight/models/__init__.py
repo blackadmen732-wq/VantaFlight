@@ -1,4 +1,5 @@
 from .telemetry import (
+    AdapterType,
     Capabilities,
     CommandResult,
     ConnectionQuality,
@@ -8,6 +9,7 @@ from .telemetry import (
 )
 
 __all__ = [
+    "AdapterType",
     "Capabilities",
     "CommandResult",
     "ConnectionQuality",
