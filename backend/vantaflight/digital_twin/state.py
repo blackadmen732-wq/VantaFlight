@@ -28,6 +28,7 @@ class DigitalTwinState:
     trajectory: TrajectoryBuffer = field(default_factory=TrajectoryBuffer)
 
     _flight_start: Optional[float] = field(default=None, repr=False)
+    _accumulated_duration: float = field(default=0.0, repr=False)
     _last_update: float = field(default_factory=time.time, repr=False)
 
     def update(self, telemetry: Telemetry) -> None:
@@ -49,11 +50,13 @@ class DigitalTwinState:
         if telemetry.armed and self._flight_start is None:
             self._flight_start = now
         elif not telemetry.armed and self._flight_start is not None:
-            self.flight_duration += now - self._flight_start
+            self._accumulated_duration += now - self._flight_start
             self._flight_start = None
 
         if self._flight_start is not None:
-            self.flight_duration = now - self._flight_start
+            self.flight_duration = self._accumulated_duration + (now - self._flight_start)
+        else:
+            self.flight_duration = self._accumulated_duration
 
         self.trajectory.add(now, self.x, self.y, self.z, self.heading)
         self._last_update = now
@@ -74,6 +77,7 @@ class DigitalTwinState:
         self.battery_percentage = 100.0
         self.flight_duration = 0.0
         self._flight_start = None
+        self._accumulated_duration = 0.0
         self.trajectory.clear()
 
     def to_dict(self) -> dict:

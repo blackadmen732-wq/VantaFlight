@@ -104,14 +104,24 @@ class FlightDatabase:
             return 1
 
     def _migrate_v2(self) -> None:
+        existing_cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(flights)").fetchall()
+        } | {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(telemetry_samples)").fetchall()
+        }
+
         for stmt in MIGRATION_V2.strip().split(";"):
             stmt = stmt.strip()
             if not stmt:
                 continue
             try:
                 self._conn.execute(stmt)
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" in str(e).lower():
+                    continue
+                raise
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
             (CURRENT_SCHEMA_VERSION,),

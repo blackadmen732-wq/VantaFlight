@@ -33,4 +33,7 @@ tools installed.
 ## Configuration
 
 See `config/sitl_defaults.env` for available environment variables.
-Copy it to the project root as `.env` and adjust values as needed.
+Source it before starting the backend:
+```bash
+source simulation/config/sitl_defaults.env
+```

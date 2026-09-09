@@ -39,8 +39,14 @@ check "npm"            npm
 
 echo ""
 echo "Optional (PX4 SITL):"
-optional "PX4-Autopilot" make
 optional "Gazebo"        gazebo
+if python3 -c "import mavsdk" 2>/dev/null; then
+  printf "  [OK]   %-20s installed\n" "mavsdk"
+  OK=$((OK + 1))
+else
+  printf "  [WARN] %-20s not found (optional, for PX4 SITL)\n" "mavsdk"
+  WARN=$((WARN + 1))
+fi
 
 echo ""
 echo "Python packages:"

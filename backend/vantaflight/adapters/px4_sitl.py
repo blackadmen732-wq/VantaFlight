@@ -39,6 +39,8 @@ class PX4SITLAdapter:
         return self._connected and self._client.connected
 
     async def connect(self) -> None:
+        if self._connected and self._client.connected:
+            return
         await self._client.connect()
         self._connected = True
 

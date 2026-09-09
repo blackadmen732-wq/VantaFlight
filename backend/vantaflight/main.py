@@ -98,8 +98,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
             if controller.twin.active:
                 await hub.broadcast({"type": "twin", "data": controller.twin.state.to_dict()})
             elapsed = time.monotonic() - t_start
-            ws_delay = elapsed * 1000
-            controller.metrics.record_telemetry_interval(elapsed)
             await asyncio.sleep(max(0, period - elapsed))
 
     # -- REST ---------------------------------------------------------------
@@ -130,7 +128,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/connect")
     async def connect(req: ConnectRequest | None = None) -> dict:
-        adapter_type = req.adapter_type if req else "mock"
+        from .models import CommandResult as CR
+
+        adapter_type = req.adapter_type if req else DEFAULT_ADAPTER
         drones = await connection_manager.discover()
 
         target = None
@@ -140,39 +140,36 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 break
 
         if target is None:
-            target = drones[0] if drones else None
+            available = [d.adapter_type.value for d in drones]
+            return CR(
+                command="connect", accepted=False,
+                message=f"unknown adapter '{adapter_type}'; available: {available}",
+            ).model_dump(mode="json")
 
-        if target is None:
-            return {"command": "connect", "accepted": False, "message": "no drones available"}
+        if connection_manager.adapter is not None and connection_manager.adapter.connected:
+            return CR(command="connect", accepted=False, message="already connected").model_dump(mode="json")
 
-        old_connect = controller.connect
-
-        async def connect_to_target():
-            if connection_manager.adapter is not None and connection_manager.adapter.connected:
-                from .models import CommandResult
-                return CommandResult(command="connect", accepted=False, message="already connected")
-
+        try:
             adapter = await connection_manager.connect(target)
-            caps = adapter.get_capabilities()
-            drone_id = target.drone_id
-            controller._flight_id = db.start_flight(
-                drone_id, caps.name,
-                adapter_type=caps.adapter_type,
-                is_simulated=caps.is_simulated,
-                connection_type=target.transport.value,
-                software_version=SOFTWARE_VERSION,
-            )
-            from .core.flight_controller import SessionState
-            controller._session_state = SessionState.CONNECTED
-            controller._connection_loss_logged = False
-            telemetry = adapter.get_telemetry()
-            controller._twin.start(battery=telemetry.battery_percentage)
-            controller._log_event("connected", f"connected to {caps.name}")
-            from .models import CommandResult
-            return CommandResult(command="connect", accepted=True, message=f"connected to {caps.name}")
+        except Exception as e:
+            return CR(command="connect", accepted=False, message=str(e)).model_dump(mode="json")
 
-        result = await connect_to_target()
-        return result.model_dump(mode="json")
+        caps = adapter.get_capabilities()
+        drone_id = target.drone_id
+        controller._flight_id = db.start_flight(
+            drone_id, caps.name,
+            adapter_type=caps.adapter_type,
+            is_simulated=caps.is_simulated,
+            connection_type=target.transport.value,
+            software_version=SOFTWARE_VERSION,
+        )
+        from .core.flight_controller import SessionState
+        controller._session_state = SessionState.CONNECTED
+        controller._connection_loss_logged = False
+        telemetry = adapter.get_telemetry()
+        controller._twin.start(battery=telemetry.battery_percentage)
+        controller._log_event("connected", f"connected to {caps.name}")
+        return CR(command="connect", accepted=True, message=f"connected to {caps.name}").model_dump(mode="json")
 
     @app.post("/api/disconnect")
     async def disconnect() -> dict:

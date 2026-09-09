@@ -37,9 +37,14 @@ function FlightDashboard() {
 
   useEffect(() => {
     return openTelemetryStream((frame) => {
-      if (frame.type === "telemetry") setTelemetry(frame.data);
-      else if (frame.type === "twin") setTwin(frame.data);
-      else pushEvent(frame.data);
+      if (frame.type === "telemetry") {
+        setTelemetry(frame.data);
+        if (!frame.data.connected) setTwin(null);
+      } else if (frame.type === "twin") {
+        setTwin(frame.data);
+      } else {
+        pushEvent(frame.data);
+      }
     }, setStreamOnline);
   }, [pushEvent]);
 
