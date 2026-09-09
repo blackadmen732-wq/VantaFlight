@@ -1,0 +1,238 @@
+:root {
+  --bg: #0a0e14;
+  --panel: #121822;
+  --panel-2: #1a222f;
+  --border: #24303f;
+  --text: #e6edf3;
+  --muted: #8b98a9;
+  --accent: #4f8cff;
+  --green: #2ecc71;
+  --red: #ff5c5c;
+  --amber: #f5a623;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+.app {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 20px 48px;
+}
+
+.brand {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.brand .logo {
+  color: var(--accent);
+}
+
+.status-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.aircraft-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.aircraft-line .label {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.badge {
+  font-weight: 700;
+  font-size: 14px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  letter-spacing: 0.5px;
+}
+
+.badge.connected {
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--green);
+  border: 1px solid rgba(46, 204, 113, 0.4);
+}
+
+.badge.disconnected {
+  background: rgba(245, 166, 35, 0.12);
+  color: var(--amber);
+  border: 1px solid rgba(245, 166, 35, 0.35);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.metric {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metric-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.metric-value {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.btn {
+  padding: 14px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: transform 0.05s ease, background 0.15s ease, opacity 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: #222c3b;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.danger {
+  background: rgba(255, 92, 92, 0.15);
+  border-color: rgba(255, 92, 92, 0.5);
+  color: var(--red);
+}
+
+.timeline {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+}
+
+.timeline h2 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+
+.timeline .empty {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.timeline ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.ev {
+  display: grid;
+  grid-template-columns: 92px 110px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.ev:last-child {
+  border-bottom: none;
+}
+
+.ev .ts {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ev .tag {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  text-align: center;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.ev.connected .tag,
+.ev.arm .tag,
+.ev.takeoff .tag,
+.ev.hold .tag,
+.ev.land .tag {
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--accent);
+}
+
+.ev.rejected .tag,
+.ev.error .tag,
+.ev.connection_lost .tag {
+  background: rgba(255, 92, 92, 0.15);
+  color: var(--red);
+}
+
+.ev .msg {
+  color: var(--text);
+}
