@@ -40,6 +40,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
+  if (!res.ok) throw new Error(`request failed: ${res.status}`);
   return (await res.json()) as T;
 }
 

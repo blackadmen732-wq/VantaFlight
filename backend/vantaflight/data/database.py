@@ -211,13 +211,14 @@ class FlightDatabase:
             self._migrate_v3()
 
     def _get_schema_version(self) -> int:
-        try:
-            row = self._conn.execute(
-                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
-            ).fetchone()
-            return int(row[0]) if row else 1
-        except sqlite3.OperationalError:
-            return 1
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+                ).fetchone()
+                return int(row[0]) if row else 1
+            except sqlite3.OperationalError:
+                return 1
 
     def _migrate_v2(self) -> None:
         existing_cols = {
@@ -338,45 +339,50 @@ class FlightDatabase:
 
     # -- reads --------------------------------------------------------------
     def count_telemetry(self, flight_id: int) -> int:
-        row = self._conn.execute(
-            "SELECT COUNT(*) AS n FROM telemetry_samples WHERE flight_id = ?",
-            (flight_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM telemetry_samples WHERE flight_id = ?",
+                (flight_id,),
+            ).fetchone()
         return int(row["n"])
 
     def get_events(self, flight_id: int) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT timestamp, event_type, message FROM flight_events "
-            "WHERE flight_id = ? ORDER BY id",
-            (flight_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT timestamp, event_type, message FROM flight_events "
+                "WHERE flight_id = ? ORDER BY id",
+                (flight_id,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def get_commands(self, flight_id: int) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT timestamp, command, accepted, message FROM commands "
-            "WHERE flight_id = ? ORDER BY id",
-            (flight_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT timestamp, command, accepted, message FROM commands "
+                "WHERE flight_id = ? ORDER BY id",
+                (flight_id,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def get_flight(self, flight_id: int) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM flights WHERE id = ?", (flight_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM flights WHERE id = ?", (flight_id,)
+            ).fetchone()
         return dict(row) if row else None
 
     def get_run_summary(self, flight_id: int) -> dict | None:
-        flight = self.get_flight(flight_id)
-        if not flight:
-            return None
-        samples = self._conn.execute(
-            "SELECT altitude, velocity, battery_percentage FROM telemetry_samples "
-            "WHERE flight_id = ? ORDER BY id",
-            (flight_id,),
-        ).fetchall()
-        commands = self.get_commands(flight_id)
-        events = self.get_events(flight_id)
+        with self._lock:
+            flight = self.get_flight(flight_id)
+            if not flight:
+                return None
+            samples = self._conn.execute(
+                "SELECT altitude, velocity, battery_percentage FROM telemetry_samples "
+                "WHERE flight_id = ? ORDER BY id",
+                (flight_id,),
+            ).fetchall()
+            commands = self.get_commands(flight_id)
+            events = self.get_events(flight_id)
 
         max_alt = max((s["altitude"] for s in samples), default=0.0)
         max_speed = max((abs(s["velocity"]) for s in samples), default=0.0)
@@ -403,7 +409,8 @@ class FlightDatabase:
         }
 
     def journal_mode(self) -> str:
-        row = self._conn.execute("PRAGMA journal_mode;").fetchone()
+        with self._lock:
+            row = self._conn.execute("PRAGMA journal_mode;").fetchone()
         return row[0]
 
     # -- V0.5 intelligence persistence ------------------------------------
@@ -435,37 +442,42 @@ class FlightDatabase:
         """Persist course metadata and gates atomically."""
         gates = list(course.get("gates", []))
         with self._lock:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO courses "
-                "(id, seed, mode, safe_volume_json, difficulty_json, course_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    course["id"],
-                    int(course["seed"]),
-                    str(course["mode"]),
-                    json.dumps(course.get("safe_volume", {}), separators=(",", ":")),
-                    json.dumps(course.get("difficulty", {}), separators=(",", ":")),
-                    json.dumps(course, separators=(",", ":")),
-                    time.time(),
-                ),
-            )
-            self._conn.execute(
-                "DELETE FROM course_gates WHERE course_id = ?", (course["id"],)
-            )
-            self._conn.executemany(
-                "INSERT INTO course_gates (course_id, gate_order, gate_id, gate_json) "
-                "VALUES (?, ?, ?, ?)",
-                [
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO courses "
+                    "(id, seed, mode, safe_volume_json, difficulty_json, course_json, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET "
+                    "seed=excluded.seed, mode=excluded.mode, "
+                    "safe_volume_json=excluded.safe_volume_json, "
+                    "difficulty_json=excluded.difficulty_json, "
+                    "course_json=excluded.course_json, created_at=excluded.created_at",
                     (
                         course["id"],
-                        int(gate.get("course_order", index)),
-                        str(gate.get("id", f"gate-{index}")),
-                        json.dumps(gate, separators=(",", ":")),
-                    )
-                    for index, gate in enumerate(gates)
-                ],
-            )
-            self._conn.commit()
+                        int(course["seed"]),
+                        str(course["mode"]),
+                        json.dumps(course.get("safe_volume", {}), separators=(",", ":")),
+                        json.dumps(course.get("difficulty", {}), separators=(",", ":")),
+                        json.dumps(course, separators=(",", ":")),
+                        time.time(),
+                    ),
+                )
+                self._conn.execute(
+                    "DELETE FROM course_gates WHERE course_id = ?", (course["id"],)
+                )
+                self._conn.executemany(
+                    "INSERT INTO course_gates (course_id, gate_order, gate_id, gate_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    [
+                        (
+                            course["id"],
+                            int(gate.get("course_order", index)),
+                            str(gate.get("id", f"gate-{index}")),
+                            json.dumps(gate, separators=(",", ":")),
+                        )
+                        for index, gate in enumerate(gates)
+                    ],
+                )
 
     def get_course(self, course_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -505,63 +517,65 @@ class FlightDatabase:
     def record_v05_batch(self, records: list[dict[str, Any]]) -> None:
         """Write a heterogeneous recorder batch in one transaction."""
         with self._lock:
-            for record in records:
-                kind = record["kind"]
-                payload = record["payload"]
-                if kind == "vision_measurement":
-                    self._conn.execute(
-                        "INSERT INTO vision_measurements "
-                        "(run_id, frame_id, target_id, captured_at, recorded_at, measurement_json) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            payload.get("run_id"),
-                            payload["frame_id"],
-                            payload.get("target_id"),
-                            float(payload["captured_at"]),
-                            time.time(),
-                            json.dumps(payload, separators=(",", ":")),
-                        ),
-                    )
-                elif kind == "target_track":
-                    self._conn.execute(
-                        "INSERT INTO target_tracks "
-                        "(run_id, target_id, timestamp, track_json) VALUES (?, ?, ?, ?)",
-                        (
-                            payload.get("run_id"),
-                            payload["target_id"],
-                            float(payload["timestamp"]),
-                            json.dumps(payload, separators=(",", ":")),
-                        ),
-                    )
-                elif kind == "trajectory_point":
-                    self._conn.execute(
-                        "INSERT INTO trajectory_points "
-                        "(run_id, trajectory_id, timestamp, point_json) VALUES (?, ?, ?, ?)",
-                        (
-                            payload.get("run_id"),
-                            payload["trajectory_id"],
-                            float(payload["timestamp"]),
-                            json.dumps(payload, separators=(",", ":")),
-                        ),
-                    )
-                elif kind == "run_metric":
-                    self._conn.execute(
-                        "INSERT INTO run_metrics "
-                        "(run_id, scope, scope_id, metric_name, metric_value, unit, timestamp) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            payload.get("run_id"),
-                            payload.get("scope", "run"),
-                            payload.get("scope_id"),
-                            payload["metric_name"],
-                            float(payload["metric_value"]),
-                            payload.get("unit"),
-                            float(payload.get("timestamp", time.time())),
-                        ),
-                    )
-                else:
-                    raise ValueError(f"unsupported recorder record kind: {kind}")
-            self._conn.commit()
+            with self._conn:
+                for record in records:
+                    kind = record["kind"]
+                    payload = record["payload"]
+                    if kind == "vision_measurement":
+                        self._conn.execute(
+                            "INSERT INTO vision_measurements "
+                            "(run_id, frame_id, target_id, captured_at, recorded_at, "
+                            "measurement_json) VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                payload.get("run_id"),
+                                payload["frame_id"],
+                                payload.get("target_id"),
+                                float(payload["captured_at"]),
+                                time.time(),
+                                json.dumps(payload, separators=(",", ":")),
+                            ),
+                        )
+                    elif kind == "target_track":
+                        self._conn.execute(
+                            "INSERT INTO target_tracks "
+                            "(run_id, target_id, timestamp, track_json) "
+                            "VALUES (?, ?, ?, ?)",
+                            (
+                                payload.get("run_id"),
+                                payload["target_id"],
+                                float(payload["timestamp"]),
+                                json.dumps(payload, separators=(",", ":")),
+                            ),
+                        )
+                    elif kind == "trajectory_point":
+                        self._conn.execute(
+                            "INSERT INTO trajectory_points "
+                            "(run_id, trajectory_id, timestamp, point_json) "
+                            "VALUES (?, ?, ?, ?)",
+                            (
+                                payload.get("run_id"),
+                                payload["trajectory_id"],
+                                float(payload["timestamp"]),
+                                json.dumps(payload, separators=(",", ":")),
+                            ),
+                        )
+                    elif kind == "run_metric":
+                        self._conn.execute(
+                            "INSERT INTO run_metrics "
+                            "(run_id, scope, scope_id, metric_name, metric_value, "
+                            "unit, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                payload.get("run_id"),
+                                payload.get("scope", "run"),
+                                payload.get("scope_id"),
+                                payload["metric_name"],
+                                float(payload["metric_value"]),
+                                payload.get("unit"),
+                                float(payload.get("timestamp", time.time())),
+                            ),
+                        )
+                    else:
+                        raise ValueError(f"unsupported recorder record kind: {kind}")
 
     def get_v05_counts(self) -> dict[str, int]:
         names = (

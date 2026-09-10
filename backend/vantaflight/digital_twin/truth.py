@@ -72,9 +72,7 @@ class DigitalTwinTruthStore:
 
     def add_validation(self, frame: ValidationFrame) -> None:
         matching_truth = any(
-            candidate.timestamp == frame.simulator_truth.timestamp
-            and candidate.course_id == frame.simulator_truth.course_id
-            for candidate in self._truth
+            candidate is frame.simulator_truth for candidate in self._truth
         )
         if not matching_truth:
             raise ValueError("validation must reference recorded simulator truth")
