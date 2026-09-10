@@ -14,6 +14,7 @@ from .models import (
     SceneTarget,
     TargetSlot,
 )
+from .planner import VantaRace, VantaRaceConfig
 from .speed import SpeedEnvelopeConfig, speed_envelope
 from .state_machine import RaceEvent, RaceState, RaceStateMachine
 from .trajectory import (
@@ -40,6 +41,8 @@ __all__ = [
     "SimulationOnlyExecutionGuard",
     "SpeedEnvelopeConfig",
     "TargetSlot",
+    "VantaRace",
+    "VantaRaceConfig",
     "lookahead_gate_position",
     "speed_envelope",
     "trajectory_through_gates",
