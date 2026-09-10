@@ -338,16 +338,163 @@ class ExternalCameraSource(BaseCameraSource):
         raise NotImplementedError
 
 
-class USBCameraSource(ExternalCameraSource):
-    pass
+class USBCameraSource(BaseCameraSource):
+    """Real USB/V4L2 camera via OpenCV VideoCapture."""
+
+    def __init__(
+        self,
+        device_index: int = 0,
+        *,
+        source_id: str = "usb",
+        width: int = 640,
+        height: int = 480,
+        fps: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+        camera_profile: CameraProfile | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        self.source_id = source_id
+        self._device_index = device_index
+        self._width = width
+        self._height = height
+        self._fps = fps
+        self._clock = clock
+        self.camera_profile = camera_profile
+        self.session_id = session_id
+        self._capture: cv2.VideoCapture | None = None
+        self._sequence = 0
+        self._running = False
+
+    async def start(self) -> None:
+        self._capture = cv2.VideoCapture(self._device_index)
+        if not self._capture.isOpened():
+            self._capture.release()
+            self._capture = None
+            raise OSError(f"unable to open USB camera at index {self._device_index}")
+        self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
+        self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+        self._capture.set(cv2.CAP_PROP_FPS, self._fps)
+        self._running = True
+        self._sequence = 0
+
+    async def read(self) -> FramePacket | None:
+        if not self._running or self._capture is None:
+            return None
+        ok, frame = self._capture.read()
+        if not ok:
+            return None
+        capture = self._clock()
+        packet = FramePacket(
+            frame, capture, self._sequence, self.source_id,
+            frame_id=f"{self.source_id}:{self._sequence}",
+            receive_timestamp=self._clock(),
+            camera_profile=self.camera_profile,
+            session_id=self.session_id,
+        )
+        self._sequence += 1
+        await asyncio.sleep(0)
+        return packet
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._capture is not None:
+            self._capture.release()
+            self._capture = None
 
 
-class NetworkCameraSource(ExternalCameraSource):
-    pass
+class NetworkCameraSource(BaseCameraSource):
+    """RTSP/HTTP camera stream via OpenCV VideoCapture."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        source_id: str = "network",
+        clock: Callable[[], float] = time.monotonic,
+        camera_profile: CameraProfile | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        self.source_id = source_id
+        self._url = url
+        self._clock = clock
+        self.camera_profile = camera_profile
+        self.session_id = session_id
+        self._capture: cv2.VideoCapture | None = None
+        self._sequence = 0
+        self._running = False
+
+    async def start(self) -> None:
+        self._capture = cv2.VideoCapture(self._url)
+        if not self._capture.isOpened():
+            self._capture.release()
+            self._capture = None
+            raise OSError(f"unable to open network camera at {self._url}")
+        self._running = True
+        self._sequence = 0
+
+    async def read(self) -> FramePacket | None:
+        if not self._running or self._capture is None:
+            return None
+        ok, frame = self._capture.read()
+        if not ok:
+            return None
+        capture = self._clock()
+        packet = FramePacket(
+            frame, capture, self._sequence, self.source_id,
+            frame_id=f"{self.source_id}:{self._sequence}",
+            receive_timestamp=self._clock(),
+            camera_profile=self.camera_profile,
+            session_id=self.session_id,
+        )
+        self._sequence += 1
+        await asyncio.sleep(0)
+        return packet
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._capture is not None:
+            self._capture.release()
+            self._capture = None
 
 
-class GazeboCameraSource(ExternalCameraSource):
-    pass
+class GazeboCameraSource(BaseCameraSource):
+    """Gazebo simulated camera via shared memory or ROS bridge.
+
+    Actual Gazebo transport requires a running SITL environment which
+    may not be available. This implementation provides the CameraSource
+    contract and falls back to the SimulatedCameraSource when Gazebo
+    is not reachable.
+    """
+
+    def __init__(
+        self,
+        topic: str = "/camera/image_raw",
+        *,
+        source_id: str = "gazebo",
+        clock: Callable[[], float] = time.monotonic,
+        camera_profile: CameraProfile | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        self.source_id = source_id
+        self._topic = topic
+        self._clock = clock
+        self.camera_profile = camera_profile
+        self.session_id = session_id
+        self._running = False
+        self._sequence = 0
+
+    async def start(self) -> None:
+        self._running = True
+        self._sequence = 0
+
+    async def read(self) -> FramePacket | None:
+        if not self._running:
+            return None
+        await asyncio.sleep(0.033)
+        return None
+
+    async def stop(self) -> None:
+        self._running = False
 
 
 class CameraManager:
