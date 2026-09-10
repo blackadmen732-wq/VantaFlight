@@ -145,7 +145,12 @@ class CourseGenerator:
     ) -> np.ndarray:
         count = max(cfg.gate_count * cfg.path_samples_per_gate, 48)
         t = np.linspace(0.0, 1.0, count)
-        low, high = self.volume.usable_lower.copy(), self.volume.usable_upper.copy()
+        # Reserve both the boundary clearance around the drone and at least
+        # one drone radius on either side of each future gate center.
+        low = self.volume.usable_lower.copy() + 2 * cfg.drone_radius
+        high = self.volume.usable_upper.copy() - 2 * cfg.drone_radius
+        if np.any(high <= low):
+            raise CourseGenerationError("safe volume is too narrow for the drone")
         span = high - low
         center = (low + high) / 2.0
         phase = rng.uniform(0.0, 2 * math.pi, 4)
@@ -252,15 +257,40 @@ class CourseGenerator:
             width = float(np.clip(base_size * size_jitter, cfg.min_gate_size, cfg.max_gate_size))
             height = float(np.clip(width * rng.uniform(.90, 1.10), cfg.min_gate_size, cfg.max_gate_size))
 
-            # Keep the complete opening inside the usable volume. The
-            # conservative radial clamp works for any yaw/pitch/roll.
-            boundary_clearance = float(np.min(np.minimum(
+            # Fit the oriented opening (plus the drone radius) to each volume
+            # axis. Narrow volumes may require a gate below the configured
+            # preferred minimum, but never one the drone cannot traverse.
+            provisional = Gate(
+                center=vector3(center),
+                size=(width, height),
+                yaw=yaw,
+                pitch=pitch,
+                roll=roll,
+                normal=vector3(normal),
+                entry=vector3(entry),
+                exit=vector3(exit),
+                order=order,
+            )
+            _, right, up = provisional.frame()
+            room = np.minimum(
                 center - self.volume.usable_lower,
                 self.volume.usable_upper - center,
-            )))
-            max_size = max(cfg.min_gate_size, 2 * boundary_clearance * .86)
-            width = min(width, max_size)
-            height = min(height, max_size)
+            ) - cfg.drone_radius
+            if np.any(room <= 0):
+                raise CourseGenerationError("safe volume leaves no gate clearance")
+            extent = np.abs(right) * width / 2 + np.abs(up) * height / 2
+            scale = min(
+                [1.0] + [
+                    float(room[axis] / extent[axis])
+                    for axis in range(3)
+                    if extent[axis] > 1e-12
+                ]
+            )
+            fit_scale = 1.0 if scale >= 1.0 else scale * .98
+            width *= fit_scale
+            height *= fit_scale
+            if min(width, height) + 1e-9 < 2 * cfg.drone_radius:
+                raise CourseGenerationError("safe volume is too narrow for the drone and gate")
             gates.append(
                 Gate(
                     center=vector3(center),

@@ -23,12 +23,19 @@ class ParameterBounds:
             raise ValueError("parameter bounds must be finite")
         if self.minimum > self.maximum:
             raise ValueError("parameter minimum must not exceed maximum")
+        if self.integer and math.ceil(self.minimum) > math.floor(self.maximum):
+            raise ValueError("integer parameter bounds contain no integers")
 
     def constrain(self, value: float | int) -> float | int:
         number = float(value)
         if not self.minimum <= number <= self.maximum:
             raise ValueError(f"value {number} is outside [{self.minimum}, {self.maximum}]")
-        return int(round(number)) if self.integer else number
+        if not self.integer:
+            return number
+        constrained = int(round(number))
+        if constrained < math.ceil(self.minimum) or constrained > math.floor(self.maximum):
+            raise ValueError(f"value {number} does not round to an integer within bounds")
+        return constrained
 
 
 @dataclass(frozen=True)
@@ -78,13 +85,15 @@ class ParameterExperiment:
         mode: CourseMode,
         generation_seed: int,
     ) -> ExperimentRecord:
-        constrained = {
-            name: self.bounds[name].constrain(value) for name, value in candidate.items()
-        }
-        # with_parameters creates a new frozen config; generator.config and all
-        # module defaults remain unchanged across successful and failed runs.
-        config = self.generator.config.with_parameters(constrained)
+        recorded_candidate: Mapping[str, float | int] = dict(candidate)
         try:
+            constrained = {
+                name: self.bounds[name].constrain(value) for name, value in candidate.items()
+            }
+            recorded_candidate = dict(constrained)
+            # with_parameters creates a new frozen config; generator.config and
+            # module defaults remain unchanged across all evaluations.
+            config = self.generator.config.with_parameters(constrained)
             course = self.generator.generate(mode, seed=generation_seed, config=config)
             raw = self.objective(course) if self.objective else course.difficulty
             if isinstance(raw, Mapping):
@@ -93,11 +102,11 @@ class ParameterExperiment:
             else:
                 score = float(raw)
                 result = {"score": score}
-            if score is not None and not math.isfinite(score):
-                raise ValueError("objective score must be finite")
+            if any(not math.isfinite(value) for value in result.values()):
+                raise ValueError("objective results must be finite")
             record = ExperimentRecord(dict(constrained), generation_seed, score, result)
         except (ValueError, RuntimeError) as exc:
-            record = ExperimentRecord(dict(constrained), generation_seed, None, {}, str(exc))
+            record = ExperimentRecord(recorded_candidate, generation_seed, None, {}, str(exc))
         self.records.append(record)
         return record
 

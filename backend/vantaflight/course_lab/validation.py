@@ -7,7 +7,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from .models import Course, Gate, SafeVolume
+from .models import BoxObstacle, Course, Gate, SafeVolume
 
 
 def _turn_angles(points: np.ndarray) -> np.ndarray:
@@ -59,6 +59,45 @@ def _segment_distance(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray
     return float(np.linalg.norm(w + sc * u - tc * v))
 
 
+def _segment_box_clearance(
+    a: Sequence[float], b: Sequence[float], obstacle: BoxObstacle
+) -> float:
+    """Exact minimum Euclidean distance between a segment and an AABB."""
+    start, end = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    direction = end - start
+    breakpoints = {0.0, 1.0}
+    for axis in range(3):
+        if abs(direction[axis]) > 1e-15:
+            for boundary in (obstacle.lower[axis], obstacle.upper[axis]):
+                crossing = float((boundary - start[axis]) / direction[axis])
+                if 0.0 < crossing < 1.0:
+                    breakpoints.add(crossing)
+    ordered = sorted(breakpoints)
+    candidates = set(ordered)
+    for left, right in zip(ordered, ordered[1:]):
+        midpoint = (left + right) / 2.0
+        point = start + midpoint * direction
+        active: list[tuple[float, float]] = []
+        for axis in range(3):
+            if point[axis] < obstacle.lower[axis]:
+                active.append((start[axis] - obstacle.lower[axis], direction[axis]))
+            elif point[axis] > obstacle.upper[axis]:
+                active.append((start[axis] - obstacle.upper[axis], direction[axis]))
+        quadratic = sum(slope * slope for _, slope in active)
+        if quadratic > 0:
+            optimum = -sum(offset * slope for offset, slope in active) / quadratic
+            candidates.add(min(right, max(left, float(optimum))))
+
+    return min(
+        float(np.linalg.norm(np.maximum(
+            np.maximum(obstacle.lower - (start + alpha * direction),
+                       (start + alpha * direction) - obstacle.upper),
+            0.0,
+        )))
+        for alpha in candidates
+    )
+
+
 def _gate_corners(gate: Gate) -> Iterable[np.ndarray]:
     _, right, up = gate.frame()
     center = np.asarray(gate.center)
@@ -67,12 +106,82 @@ def _gate_corners(gate: Gate) -> Iterable[np.ndarray]:
             yield center + horizontal * gate.width * right + vertical * gate.height * up
 
 
-def _line_of_sight(a: Sequence[float], b: Sequence[float], volume: SafeVolume) -> bool:
-    for alpha in np.linspace(0.0, 1.0, 17):
-        point = np.asarray(a) * (1 - alpha) + np.asarray(b) * alpha
-        if any(obstacle.contains(point) for obstacle in volume.obstacles):
+def _box_corners(obstacle: BoxObstacle) -> tuple[np.ndarray, ...]:
+    return tuple(
+        np.asarray((x, y, z), dtype=float)
+        for x in (obstacle.lower[0], obstacle.upper[0])
+        for y in (obstacle.lower[1], obstacle.upper[1])
+        for z in (obstacle.lower[2], obstacle.upper[2])
+    )
+
+
+def _box_edges(obstacle: BoxObstacle) -> Iterable[tuple[np.ndarray, np.ndarray]]:
+    corners = _box_corners(obstacle)
+    for index, corner in enumerate(corners):
+        for bit in (1, 2, 4):
+            other = index ^ bit
+            if index < other:
+                yield corner, corners[other]
+
+
+def _point_rectangle_distance(point: np.ndarray, gate: Gate) -> float:
+    plane, horizontal, vertical = gate.opening_coordinates(point)
+    horizontal = max(abs(horizontal) - gate.width / 2, 0.0)
+    vertical = max(abs(vertical) - gate.height / 2, 0.0)
+    return float(math.sqrt(plane * plane + horizontal * horizontal + vertical * vertical))
+
+
+def _rectangle_intersects_box(gate: Gate, obstacle: BoxObstacle) -> bool:
+    """Separating-axis test for a zero-thickness oriented rectangle and AABB."""
+    normal, right, up = gate.frame()
+    center_delta = np.asarray(gate.center) - np.asarray(obstacle.center)
+    box_extent = np.asarray(obstacle.size) / 2.0
+    axes = [
+        np.eye(3)[axis] for axis in range(3)
+    ] + [normal] + [
+        np.cross(axis, edge)
+        for axis in np.eye(3)
+        for edge in (right, up)
+    ]
+    for axis in axes:
+        length = float(np.linalg.norm(axis))
+        if length < 1e-12:
+            continue
+        axis = axis / length
+        separation = abs(float(center_delta @ axis))
+        box_radius = float(box_extent @ np.abs(axis))
+        rectangle_radius = (
+            gate.width / 2 * abs(float(right @ axis))
+            + gate.height / 2 * abs(float(up @ axis))
+        )
+        if separation > box_radius + rectangle_radius + 1e-12:
             return False
     return True
+
+
+def _gate_obstacle_clearance(gate: Gate, obstacle: BoxObstacle) -> float:
+    """Exact feature distance between the gate's opening plane and an AABB."""
+    if _rectangle_intersects_box(gate, obstacle):
+        return 0.0
+    gate_corners = tuple(_gate_corners(gate))
+    gate_edges = tuple(
+        (gate_corners[a], gate_corners[b]) for a, b in ((0, 1), (0, 2), (1, 3), (2, 3))
+    )
+    box_edges = tuple(_box_edges(obstacle))
+    distances = [
+        *(_segment_box_clearance(a, b, obstacle) for a, b in gate_edges),
+        *(_point_rectangle_distance(corner, gate) for corner in _box_corners(obstacle)),
+        *(
+            _segment_distance(a, b, c, d)
+            for a, b in gate_edges
+            for c, d in box_edges
+        ),
+    ]
+    return min(distances)
+
+
+def _line_of_sight(a: Sequence[float], b: Sequence[float], volume: SafeVolume) -> bool:
+    return all(_segment_box_clearance(a, b, obstacle) > 0 for obstacle in volume.obstacles)
 
 
 def difficulty_metrics(
@@ -162,7 +271,7 @@ class CourseValidator:
             return ValidationReport(False, tuple(errors), {})
 
         for index, point in enumerate(points):
-            if not course.volume.contains(point):
+            if not course.volume.contains(point, margin=self.drone_radius):
                 errors.append(f"path point {index} violates boundary/floor/ceiling")
                 break
             if any(obstacle.clearance(point) + 1e-7 < required_clearance for obstacle in course.volume.obstacles):
@@ -171,6 +280,13 @@ class CourseValidator:
 
         segment_vectors = np.diff(points, axis=0)
         segment_lengths = np.linalg.norm(segment_vectors, axis=1)
+        for index, (start, end) in enumerate(zip(points, points[1:])):
+            if any(
+                _segment_box_clearance(start, end, obstacle) + 1e-7 < required_clearance
+                for obstacle in course.volume.obstacles
+            ):
+                errors.append(f"path segment {index} lacks obstacle clearance")
+                break
         if np.any(segment_lengths < 1e-8):
             errors.append("path contains a discontinuous zero-length segment")
         horizontal = np.linalg.norm(segment_vectors[:, :2], axis=1)
@@ -189,7 +305,7 @@ class CourseValidator:
         )
         if not monotonic:
             for i in range(len(points) - 1):
-                for j in range(i + 3, len(points) - 1):
+                for j in range(i + 2, len(points) - 1):
                     if _segment_distance(points[i], points[i + 1], points[j], points[j + 1]) < self.self_intersection_clearance:
                         errors.append(f"path self-intersects near segments {i} and {j}")
                         break
@@ -210,12 +326,13 @@ class CourseValidator:
                 errors.append(f"gate {gate.order} is non-finite")
                 continue
             corners = tuple(_gate_corners(gate))
-            if not all(course.volume.contains(corner) for corner in corners):
+            if gate.width + 1e-7 < 2 * self.drone_radius or gate.height + 1e-7 < 2 * self.drone_radius:
+                errors.append(f"gate {gate.order} opening is too small for drone")
+            if not all(course.volume.contains(corner, margin=self.drone_radius) for corner in corners):
                 errors.append(f"gate {gate.order} opening violates volume boundary")
             if any(
-                obstacle.clearance(corner) + 1e-7 < self.drone_radius
+                _gate_obstacle_clearance(gate, obstacle) + 1e-7 < self.drone_radius
                 for obstacle in course.volume.obstacles
-                for corner in corners
             ):
                 errors.append(f"gate {gate.order} opening lacks obstacle clearance")
 
@@ -230,7 +347,10 @@ class CourseValidator:
                     np.asarray(gate.exit) - np.asarray(gate.entry)
                 )
                 _, right, up = gate.opening_coordinates(crossing)
-                if abs(right) > gate.width / 2 or abs(up) > gate.height / 2:
+                if (
+                    abs(right) > gate.width / 2 - self.drone_radius
+                    or abs(up) > gate.height / 2 - self.drone_radius
+                ):
                     errors.append(f"gate {gate.order} path misses its opening")
 
         metrics = difficulty_metrics(points, gates, course.volume)
