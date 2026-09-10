@@ -27,7 +27,7 @@ Foundation remains intact beneath the new packages.
 ### V0.5 verification
 
 - Local automated test results are recorded in the pull request.
-- `TESTED IN CI`: pending repository CI.
+- `TESTED IN CI`: backend and frontend VantaFlight CI jobs pass on the PR.
 - `SIMULATION VERIFIED`: not claimed until a live PX4/Gazebo run succeeds.
 - `HARDWARE VERIFIED`: no V0.5 autonomous behavior.
 
