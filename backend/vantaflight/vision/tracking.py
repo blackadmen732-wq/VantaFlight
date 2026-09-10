@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from uuid import uuid4
 
 import numpy as np
+
+from .concepts import TargetCandidate
 
 
 class TrackStatus(str, Enum):
@@ -145,3 +148,76 @@ class KalmanTargetTracker:
             self.missed,
             reacquired,
         )
+
+
+@dataclass
+class TargetTrack:
+    track_id: str
+    profile_id: str
+    tracker: KalmanTargetTracker
+    last_area_px: float
+    candidate: TargetCandidate | None = None
+
+
+class MultiTargetTracker:
+    """Greedy uncertainty-gated tracker map for simultaneous image targets."""
+
+    def __init__(self, config: TrackerConfig | None = None, max_tracks: int = 16) -> None:
+        self.config = config or TrackerConfig()
+        self.max_tracks = max_tracks
+        self.tracks: dict[str, TargetTrack] = {}
+
+    def update(
+        self, candidates: list[TargetCandidate], timestamp: float
+    ) -> dict[str, TrackSnapshot]:
+        unassigned = set(range(len(candidates)))
+        snapshots: dict[str, TrackSnapshot] = {}
+        for track_id in sorted(self.tracks):
+            record = self.tracks[track_id]
+            if record.tracker.timestamp is not None and timestamp > record.tracker.timestamp:
+                record.tracker.predict(timestamp)
+            choices: list[tuple[float, int]] = []
+            for index in unassigned:
+                candidate = candidates[index]
+                if candidate.profile_id != record.profile_id:
+                    continue
+                _, _, distance = record.tracker.innovation(np.asarray(candidate.center))
+                area_ratio = candidate.area_px / max(record.last_area_px, 1e-9)
+                if (
+                    distance <= self.config.mahalanobis_gate
+                    and 0.25 <= area_ratio <= 4.0
+                ):
+                    choices.append((distance + abs(float(np.log(area_ratio))), index))
+            if choices:
+                _, index = min(choices)
+                candidate = candidates[index]
+                unassigned.remove(index)
+                record.candidate = candidate
+                record.last_area_px = candidate.area_px
+                snapshots[track_id] = record.tracker.update(
+                    np.asarray(candidate.center), timestamp
+                )
+            else:
+                record.candidate = None
+                snapshots[track_id] = record.tracker.update(None, timestamp)
+
+        for index in sorted(unassigned):
+            if len(self.tracks) >= self.max_tracks:
+                break
+            candidate = candidates[index]
+            track_id = f"track-{uuid4().hex}"
+            tracker = KalmanTargetTracker(self.config)
+            snapshot = tracker.update(np.asarray(candidate.center), timestamp)
+            self.tracks[track_id] = TargetTrack(
+                track_id, candidate.profile_id, tracker, candidate.area_px, candidate
+            )
+            snapshots[track_id] = snapshot
+
+        expired = [
+            track_id for track_id, record in self.tracks.items()
+            if record.tracker.status == TrackStatus.LOST
+            and record.tracker.missed > self.config.max_missed + 2
+        ]
+        for track_id in expired:
+            del self.tracks[track_id]
+        return snapshots

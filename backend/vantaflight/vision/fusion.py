@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .concepts import ObservedPose3D, PredictedPose3D
+
 
 @dataclass(frozen=True)
 class VisionEvidence:
@@ -25,6 +27,13 @@ class FusionResult:
     timestamp: float
     used_sources: tuple[str, ...]
     contributions: dict[str, float] = field(default_factory=dict)
+    observed_pose: ObservedPose3D | None = None
+    predicted_pose: PredictedPose3D | None = None
+    velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    uncertainty: np.ndarray = field(default_factory=lambda: np.eye(3))
+    age_s: float = 0.0
+    track_state: str = "untracked"
+    evidence: tuple[VisionEvidence, ...] = ()
 
 
 class VantaFusion:
@@ -36,7 +45,17 @@ class VantaFusion:
         self.max_age_s = max_age_s
         self.prior = prior
 
-    def fuse(self, evidence: list[VisionEvidence], timestamp: float) -> FusionResult:
+    def fuse(
+        self,
+        evidence: list[VisionEvidence],
+        timestamp: float,
+        *,
+        observed_pose: ObservedPose3D | None = None,
+        predicted_pose: PredictedPose3D | None = None,
+        velocity: np.ndarray | None = None,
+        uncertainty: np.ndarray | None = None,
+        track_state: str = "untracked",
+    ) -> FusionResult:
         fresh = [item for item in evidence if 0 <= timestamp - item.timestamp <= self.max_age_s]
         # Keep strongest member of each declared correlated group.
         groups: dict[str, VisionEvidence] = {}
@@ -55,4 +74,11 @@ class VantaFusion:
             contributions[item.source] = contribution
             total += contribution
         confidence = float(1 / (1 + np.exp(-np.clip(total, -60, 60))))
-        return FusionResult(confidence, timestamp, tuple(sorted(contributions)), contributions)
+        newest = max((item.timestamp for item in groups.values()), default=timestamp)
+        return FusionResult(
+            confidence, timestamp, tuple(sorted(contributions)), contributions,
+            observed_pose, predicted_pose,
+            np.asarray(np.zeros(3) if velocity is None else velocity, dtype=np.float64),
+            np.asarray(np.eye(3) if uncertainty is None else uncertainty, dtype=np.float64),
+            max(0.0, timestamp - newest), track_state, tuple(groups.values()),
+        )

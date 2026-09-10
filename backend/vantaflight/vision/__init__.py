@@ -7,18 +7,27 @@ normalized data rather than hardware or MAVSDK imports.
 from .association import AssociationResult, CandidateAssociator
 from .capture import (
     BaseCameraSource,
+    CameraManager,
     CameraSource,
+    ExternalCameraSource,
     FileCameraSource,
     FrameBuffer,
     FrameBufferMetrics,
+    GazeboCameraSource,
+    NetworkCameraSource,
+    PreviewBuffer,
+    PreviewBufferMetrics,
     SyntheticCameraSource,
+    USBCameraSource,
 )
 from .concepts import (
     AircraftState,
     CameraProfile,
     CoordinateFrame,
     FramePacket,
+    ObservedPose3D,
     PoseEstimate,
+    PredictedPose3D,
     TargetCandidate,
     TargetProfile,
 )
@@ -34,7 +43,14 @@ from .preprocess import OpenCVPreprocessor, PreprocessConfig, PreprocessResult
 from .roi import ROIPolicyConfig, ROISearchPolicy, ROIState
 from .scene import SceneObject, VantaScene
 from .synthetic import project_planar_target, render_target_image
-from .tracking import KalmanTargetTracker, TrackerConfig, TrackSnapshot, TrackStatus
+from .tracking import (
+    KalmanTargetTracker,
+    MultiTargetTracker,
+    TargetTrack,
+    TrackerConfig,
+    TrackSnapshot,
+    TrackStatus,
+)
 from .transforms import (
     body_to_world,
     camera_to_body,
@@ -46,15 +62,18 @@ from .transforms import (
 
 __all__ = [
     "AircraftState", "AssociationResult", "AsyncDetectionResult", "AsyncDetector",
-    "BaseCameraSource", "CameraProfile", "CameraSource", "CandidateAssociator",
-    "ClassicalTargetDetector", "CoordinateFrame", "DetectorConfig", "FileCameraSource",
-    "FrameBuffer", "FrameBufferMetrics", "FramePacket", "FusionResult",
+    "BaseCameraSource", "CameraManager", "CameraProfile", "CameraSource",
+    "CandidateAssociator", "ClassicalTargetDetector", "CoordinateFrame", "DetectorConfig",
+    "ExternalCameraSource", "FileCameraSource", "FrameBuffer", "FrameBufferMetrics",
+    "FramePacket", "FusionResult", "GazeboCameraSource",
     "KalmanTargetTracker", "LatencyTimeline", "LockConfig", "LockSnapshot", "LockState",
-    "ONNXDetector", "OpenCVPreprocessor", "OpticalFlowResult", "PoseConfig",
-    "PoseEstimate", "PoseEstimator", "PoseResult", "PreprocessConfig", "PreprocessResult",
-    "PyramidalLK", "ROIPolicyConfig", "ROISearchPolicy", "ROIState", "SceneObject",
+    "MultiTargetTracker", "NetworkCameraSource", "ObservedPose3D", "ONNXDetector",
+    "OpenCVPreprocessor", "OpticalFlowResult", "PoseConfig", "PoseEstimate", "PoseEstimator",
+    "PoseResult", "PredictedPose3D", "PreprocessConfig", "PreprocessResult", "PreviewBuffer",
+    "PreviewBufferMetrics", "PyramidalLK", "ROIPolicyConfig", "ROISearchPolicy", "ROIState", "SceneObject",
     "SyntheticCameraSource", "TargetCandidate", "TargetLock", "TargetProfile",
-    "TrackSnapshot", "TrackStatus", "TrackerConfig", "VantaFusion", "VantaScene",
+    "TargetTrack", "TrackSnapshot", "TrackStatus", "TrackerConfig", "USBCameraSource",
+    "VantaFusion", "VantaScene",
     "VisionEvidence", "VisionPipeline", "VisionPipelineResult", "body_to_world",
     "camera_to_body", "camera_to_world", "default_optical_to_frd", "invert_transform",
     "order_corners_clockwise", "predict_position_for_latency", "project_planar_target",
