@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import time
 from enum import Enum
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
 class FlightMode(str, Enum):
-    """High-level, vendor-neutral flight modes."""
-
     IDLE = "IDLE"
     TAKEOFF = "TAKEOFF"
     HOLD = "HOLD"
@@ -21,8 +20,6 @@ class FlightMode(str, Enum):
 
 
 class ConnectionQuality(str, Enum):
-    """Coarse link quality bucket, independent of the underlying transport."""
-
     NONE = "NONE"
     POOR = "POOR"
     FAIR = "FAIR"
@@ -31,12 +28,6 @@ class ConnectionQuality(str, Enum):
 
 
 class Telemetry(BaseModel):
-    """A single normalized telemetry snapshot.
-
-    Units: distances in meters, velocity in m/s, heading in degrees [0, 360),
-    battery in percent [0, 100].
-    """
-
     timestamp: float = Field(default_factory=time.time)
     connected: bool = False
     armed: bool = False
@@ -45,36 +36,38 @@ class Telemetry(BaseModel):
     y: float = 0.0
     z: float = 0.0
     altitude: float = 0.0
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     velocity: float = 0.0
+    ground_speed: float = 0.0
     heading: float = 0.0
     battery_percentage: float = 100.0
     connection_quality: ConnectionQuality = ConnectionQuality.NONE
 
     @property
     def airborne(self) -> bool:
-        """True when the aircraft is meaningfully off the ground."""
         return self.connected and self.altitude > 0.15
 
 
 class Capabilities(BaseModel):
-    """What a given adapter/drone supports.
-
-    Lets the UI and safety layer adapt without hard-coding vendor assumptions.
-    """
-
     name: str
+    adapter_type: str = "unknown"
     can_arm: bool = True
     can_takeoff: bool = True
     can_hold: bool = True
     can_land: bool = True
     supports_position: bool = True
-    max_altitude_m: float = 120.0
+    supports_velocity: bool = True
+    supports_heading: bool = True
+    supports_gps: bool = False
+    supports_battery: bool = True
+    supports_camera: bool = False
     is_simulated: bool = True
+    max_altitude_m: float = 120.0
+    supported_capabilities: list[str] = Field(default_factory=list)
 
 
 class CommandResult(BaseModel):
-    """Result of attempting a command, whether accepted or rejected by safety."""
-
     command: str
     accepted: bool
     message: str = ""
@@ -82,8 +75,11 @@ class CommandResult(BaseModel):
 
 
 class FlightEvent(BaseModel):
-    """A discrete, human-readable event in a flight's timeline."""
-
     timestamp: float = Field(default_factory=time.time)
     event_type: str
     message: str
+
+
+class AdapterType(str, Enum):
+    MOCK = "mock"
+    PX4_SITL = "px4_sitl"

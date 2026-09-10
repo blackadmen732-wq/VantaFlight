@@ -55,7 +55,7 @@ that one contract — nothing else changes.
 
 ## Running VantaFlight locally (Linux / Chromebook Linux)
 
-You need Python 3.10+ and Node.js 18+.
+You need Python 3.10+ and Node.js 20+ (Node 22 recommended for full test suite).
 
 ### 1. Install dependencies
 
