@@ -42,7 +42,12 @@ from .pose import PoseConfig, PoseEstimator, PoseResult
 from .preprocess import OpenCVPreprocessor, PreprocessConfig, PreprocessResult
 from .roi import ROIPolicyConfig, ROISearchPolicy, ROIState
 from .scene import SceneObject, VantaScene
-from .synthetic import project_planar_target, render_target_image
+from .synthetic import (
+    SyntheticTargetSpec,
+    project_planar_target,
+    render_synthetic_scene,
+    render_target_image,
+)
 from .tracking import (
     KalmanTargetTracker,
     MultiTargetTracker,
@@ -71,11 +76,11 @@ __all__ = [
     "OpenCVPreprocessor", "OpticalFlowResult", "PoseConfig", "PoseEstimate", "PoseEstimator",
     "PoseResult", "PredictedPose3D", "PreprocessConfig", "PreprocessResult", "PreviewBuffer",
     "PreviewBufferMetrics", "PyramidalLK", "ROIPolicyConfig", "ROISearchPolicy", "ROIState", "SceneObject",
-    "SyntheticCameraSource", "TargetCandidate", "TargetLock", "TargetProfile",
+    "SyntheticCameraSource", "SyntheticTargetSpec", "TargetCandidate", "TargetLock", "TargetProfile",
     "TargetTrack", "TrackSnapshot", "TrackStatus", "TrackerConfig", "USBCameraSource",
     "VantaFusion", "VantaScene",
     "VisionEvidence", "VisionPipeline", "VisionPipelineResult", "body_to_world",
     "camera_to_body", "camera_to_world", "default_optical_to_frd", "invert_transform",
     "order_corners_clockwise", "predict_position_for_latency", "project_planar_target",
-    "render_target_image", "transform_point",
+    "render_synthetic_scene", "render_target_image", "transform_point",
 ]

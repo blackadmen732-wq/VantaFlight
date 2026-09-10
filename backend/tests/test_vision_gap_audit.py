@@ -16,11 +16,13 @@ from vantaflight.vision import (
     LockState,
     PreviewBuffer,
     SyntheticCameraSource,
+    SyntheticTargetSpec,
     TargetCandidate,
     TargetLock,
     TargetProfile,
     VisionPipeline,
     default_optical_to_frd,
+    render_synthetic_scene,
     render_target_image,
 )
 
@@ -236,3 +238,29 @@ def test_vision_has_no_mavsdk_or_digital_twin_imports() -> None:
     assert "import mavsdk" not in source.lower()
     assert "vantaflight.digital_twin" not in source
     assert "from ..digital_twin" not in source
+
+
+def test_synthetic_scene_supports_multiple_targets_artifacts_and_reproducibility() -> None:
+    targets = (
+        SyntheticTargetSpec(
+            np.array([[20, 20], [100, 20], [100, 80], [20, 80]]),
+            brightness=0.8,
+            occlusion_fraction=0.1,
+        ),
+        SyntheticTargetSpec(
+            np.array([[180, 110], [285, 125], [275, 205], [170, 190]]),
+            bgr=(0, 220, 0),
+        ),
+    )
+    first = render_synthetic_scene(
+        (320, 240), targets, noise_std=2.0, motion_blur_px=3, seed=44
+    )
+    second = render_synthetic_scene(
+        (320, 240), targets, noise_std=2.0, motion_blur_px=3, seed=44
+    )
+    different = render_synthetic_scene(
+        (320, 240), targets, noise_std=2.0, motion_blur_px=3, seed=45
+    )
+    assert np.array_equal(first, second)
+    assert not np.array_equal(first, different)
+    assert first.shape == (240, 320, 3)
