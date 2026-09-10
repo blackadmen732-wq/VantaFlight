@@ -40,6 +40,7 @@ class ClassicalTargetDetector:
         image: np.ndarray,
         timestamp: float,
         roi: tuple[int, int, int, int] | None = None,
+        frame_id: str | None = None,
     ) -> list[TargetCandidate]:
         if image.ndim != 3 or image.shape[2] != 3:
             raise ValueError("detector expects a BGR image")
@@ -55,7 +56,13 @@ class ClassicalTargetDetector:
         kernel = np.ones((kernel_size, kernel_size), np.uint8) if kernel_size > 1 else None
 
         for profile in self.profiles:
-            mask = cv2.inRange(hsv, np.array(profile.hsv_lower), np.array(profile.hsv_upper))
+            if not profile.color_ranges:
+                continue
+            mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+            for lower, upper in profile.color_ranges:
+                mask = cv2.bitwise_or(
+                    mask, cv2.inRange(hsv, np.array(lower), np.array(upper))
+                )
             if kernel is not None:
                 mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
                 mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
@@ -99,7 +106,14 @@ class ClassicalTargetDetector:
                 shifted_contour[:, 0, 0] += x0
                 shifted_contour[:, 0, 1] += y0
                 candidates.append(
-                    TargetCandidate(profile, corners, shifted_contour, (cx, cy), area, score, timestamp)
+                    TargetCandidate(
+                        profile, corners, shifted_contour, (cx, cy), area, score, timestamp,
+                        frame_id=frame_id,
+                        color_confidence=fill,
+                        edge_confidence=min(1.0, len(polygon) / max(1, profile.expected_corners)),
+                        shape_confidence=solidity,
+                        geometry_confidence=score,
+                    )
                 )
         candidates.sort(key=lambda candidate: (candidate.score, candidate.area_px), reverse=True)
         return candidates[: self.config.max_candidates]

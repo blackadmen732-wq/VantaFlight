@@ -8,6 +8,11 @@ import numpy as np
 
 @dataclass
 class LatencyTimeline:
+    STAGES = (
+        "capture", "receive", "preprocess", "detect", "pose", "track",
+        "fusion", "planning", "command",
+    )
+
     capture_timestamp: float
     marks: dict[str, float] = field(default_factory=dict)
 
@@ -29,6 +34,15 @@ class LatencyTimeline:
             durations[name] = (timestamp - previous) * 1000
             previous = timestamp
         return durations
+
+    def stage_timestamps(self) -> dict[str, float | None]:
+        """Return the canonical timeline, including stages not reached yet."""
+        return {
+            stage: (
+                self.capture_timestamp if stage == "capture" else self.marks.get(stage)
+            )
+            for stage in self.STAGES
+        }
 
 
 def predict_position_for_latency(
