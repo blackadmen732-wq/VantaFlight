@@ -19,8 +19,11 @@ class MAVLinkConfig:
     simulation_only: bool = True
 
     def __post_init__(self) -> None:
-        if self.simulation_only:
-            validate_sitl_address(self.system_address)
+        if not self.simulation_only:
+            raise PhysicalMAVLinkBlocked(
+                "physical MAVLink connections are not supported"
+            )
+        validate_sitl_address(self.system_address)
 
 
 def validate_sitl_address(address: str) -> None:
