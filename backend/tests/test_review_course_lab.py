@@ -174,15 +174,20 @@ def test_integer_bounds_reject_ranges_without_an_integer():
 def test_invalid_experiment_candidate_is_recorded_instead_of_aborting():
     experiment = ParameterExperiment(
         CourseGenerator(),
-        {"gate_count": ParameterBounds(5, 8, integer=True)},
+        {
+            "min_gate_size": ParameterBounds(1, 5),
+            "max_gate_size": ParameterBounds(1, 5),
+        },
     )
 
-    records = experiment.grid_search({"gate_count": [9]})
+    records = experiment.grid_search(
+        {"min_gate_size": [4], "max_gate_size": [2]}
+    )
 
     assert len(records) == 1
-    assert records[0].candidate == {"gate_count": 9}
+    assert records[0].candidate == {"min_gate_size": 4.0, "max_gate_size": 2.0}
     assert records[0].score is None
-    assert "outside" in (records[0].error or "")
+    assert "gate size range is invalid" in (records[0].error or "")
     assert experiment.records == list(records)
 
 
