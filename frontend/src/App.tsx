@@ -16,6 +16,7 @@ import RunSummaryCard from "./components/RunSummaryCard";
 import SimulationLab from "./pages/SimulationLab";
 import VisionPage from "./pages/VisionPage";
 import PerformancePage from "./pages/PerformancePage";
+import ReplayPage from "./pages/ReplayPage";
 import TrainingPage from "./pages/TrainingPage";
 
 const AIRBORNE_EPS = 0.15;
@@ -203,6 +204,7 @@ export default function App() {
             <NavLink to="/sim">Sim Lab</NavLink>
             <NavLink to="/performance">Performance</NavLink>
             <NavLink to="/training">Training</NavLink>
+            <NavLink to="/replay">Replay</NavLink>
           </nav>
         </header>
 
@@ -212,6 +214,7 @@ export default function App() {
           <Route path="/sim" element={<SimLabWrapper />} />
           <Route path="/performance" element={<PerformancePage />} />
           <Route path="/training" element={<TrainingPage />} />
+          <Route path="/replay" element={<ReplayPage />} />
         </Routes>
       </div>
     </BrowserRouter>

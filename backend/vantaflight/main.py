@@ -42,6 +42,7 @@ from .runtime import (
     RuntimeSupervisor,
     VantaPerformanceManager,
 )
+from .replay import ReplayLoader, ReplayPlayer
 from .training import (
     CampaignConfig,
     CurriculumBuilder,
@@ -124,6 +125,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
     perf_manager = VantaPerformanceManager()
     hw_profiler = HardwareProfiler()
     training_engine = TrainingEngine()
+    replay_loader = ReplayLoader(db)
+    replay_player = ReplayPlayer()
     app.state.db = db
     app.state.supervisor = supervisor
     app.state.perf_manager = perf_manager
@@ -512,6 +515,74 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return {
             name: profile.to_dict()
             for name, profile in FAULT_PROFILES.items()
+        }
+
+    # -- V0.9 replay system ---------------------------------------------------
+    @app.get("/api/replay/flights")
+    async def replay_flights() -> dict:
+        flights = replay_loader.list_flights()
+        return {"flights": [f.to_dict() for f in flights]}
+
+    @app.post("/api/replay/load/{flight_id}")
+    async def replay_load(flight_id: int) -> dict:
+        try:
+            timeline = replay_loader.load_timeline(flight_id)
+            replay_player.load(timeline)
+            return {
+                "status": "loaded",
+                "timeline": timeline.to_dict(),
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/replay/status")
+    async def replay_status() -> dict:
+        return replay_player.to_dict()
+
+    @app.post("/api/replay/play")
+    async def replay_play() -> dict:
+        replay_player.play()
+        return replay_player.to_dict()
+
+    @app.post("/api/replay/pause")
+    async def replay_pause() -> dict:
+        replay_player.pause()
+        return replay_player.to_dict()
+
+    @app.post("/api/replay/stop")
+    async def replay_stop() -> dict:
+        replay_player.stop()
+        return replay_player.to_dict()
+
+    class ReplaySeekRequest(BaseModel):
+        time_offset: float
+
+    @app.post("/api/replay/seek")
+    async def replay_seek(req: ReplaySeekRequest) -> dict:
+        replay_player.seek(req.time_offset)
+        return replay_player.to_dict()
+
+    class ReplaySpeedRequest(BaseModel):
+        speed: float = 1.0
+
+    @app.post("/api/replay/speed")
+    async def replay_speed(req: ReplaySpeedRequest) -> dict:
+        replay_player.set_speed(req.speed)
+        return replay_player.to_dict()
+
+    @app.get("/api/replay/frame")
+    async def replay_frame() -> dict:
+        frame = replay_player.current_frame()
+        if frame is None:
+            return {"frame": None}
+        return {"frame": frame.to_dict()}
+
+    @app.post("/api/replay/tick")
+    async def replay_tick() -> dict:
+        frames = replay_player.tick()
+        return {
+            "status": replay_player.to_dict(),
+            "frames": [f.to_dict() for f in frames],
         }
 
     # -- WebSocket ----------------------------------------------------------
