@@ -87,11 +87,16 @@ class GateTarget:
     def __post_init__(self) -> None:
         position = vector3(self.position, "position")
         normal = vector3(self.normal, "normal")
-        magnitude = float(np.linalg.norm(normal))
+        # Scaling first avoids overflow for finite normals near float64 limits.
+        scale = float(np.max(np.abs(normal)))
+        if scale == 0.0:
+            raise ValueError("normal cannot be zero")
+        unit_scale = normal / scale
+        magnitude = float(np.linalg.norm(unit_scale))
         if magnitude <= 1e-9:
             raise ValueError("normal cannot be zero")
         object.__setattr__(self, "position", position)
-        object.__setattr__(self, "normal", normal / magnitude)
+        object.__setattr__(self, "normal", unit_scale / magnitude)
         for name in ("clearance", "confidence", "uncertainty"):
             value = float(getattr(self, name))
             if not np.isfinite(value):

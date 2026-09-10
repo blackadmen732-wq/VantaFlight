@@ -51,6 +51,8 @@ def speed_envelope(
     config: SpeedEnvelopeConfig = SpeedEnvelopeConfig(),
 ) -> NDArray[np.float64]:
     """Compute point speeds, then enforce acceleration and braking reachability."""
+    if not np.isfinite(initial_speed) or initial_speed < 0.0:
+        raise ValueError("initial_speed must be finite and non-negative")
     distance = np.asarray(distances, dtype=np.float64)
     arrays = [
         np.asarray(value, dtype=np.float64)
@@ -92,8 +94,11 @@ def speed_envelope(
             top_speed * uncertainty_factor,
         )
     )
-    speeds = np.maximum(np.minimum(local_cap, config.max_speed), config.min_speed)
-    speeds[0] = min(speeds[0], max(float(initial_speed), 0.0))
+    # min_speed is an operating preference, never permission to exceed a
+    # curvature, clearance, confidence, uncertainty, or vertical safety cap.
+    preferred = np.full_like(distance, max(config.min_speed, top_speed))
+    speeds = np.minimum(local_cap, preferred)
+    speeds[0] = min(speeds[0], float(initial_speed))
 
     segment_lengths = np.diff(distance)
     for index, segment in enumerate(segment_lengths, start=1):

@@ -25,6 +25,18 @@ class VantaRaceConfig:
     speed: SpeedEnvelopeConfig = SpeedEnvelopeConfig()
 
     def __post_init__(self) -> None:
+        if not all(
+            np.isfinite(value)
+            for value in (
+                self.aggression,
+                self.nominal_speed,
+                self.prediction_grace_s,
+                self.command_lookahead_s,
+                self.acquire_confidence,
+                self.lock_confidence,
+            )
+        ):
+            raise ValueError("planner configuration values must be finite")
         if not 0.0 <= self.aggression <= 1.0:
             raise ValueError("aggression must be between zero and one")
         if self.nominal_speed <= 0.0:
@@ -98,7 +110,7 @@ class VantaRace:
         if gates:
             self._last_seen_at = aircraft.timestamp
             self._had_target = True
-            self._advance_state(aircraft, gates[0])
+            self._advance_state(aircraft, gates)
             self._trajectory = self._build_retimed_trajectory(aircraft, gates)
             return self._trajectory.evaluate(
                 min(
@@ -160,7 +172,8 @@ class VantaRace:
                 )
         return gates
 
-    def _advance_state(self, aircraft: AircraftState, current: GateTarget) -> None:
+    def _advance_state(self, aircraft: AircraftState, gates: list[GateTarget]) -> None:
+        current = gates[0]
         confidence = current.confidence
         event: RaceEvent | None = None
         if self.state is RaceState.RECOVER:
@@ -180,9 +193,15 @@ class VantaRace:
             if signed_distance >= 0.0:
                 event = RaceEvent.GATE_PASSED
         elif self.state is RaceState.NEXT:
-            event = RaceEvent.ADVANCE
+            event = RaceEvent.ADVANCE if len(gates) > 1 else RaceEvent.COURSE_COMPLETE
         if event is not None:
             self.state_machine.transition(event)
+            if (
+                event is RaceEvent.GATE_PASSED
+                and len(gates) == 1
+                and self.state is RaceState.NEXT
+            ):
+                self.state_machine.transition(RaceEvent.COURSE_COMPLETE)
 
     def _next_trajectory_id(self) -> str:
         self._sequence += 1
@@ -259,13 +278,31 @@ class VantaRace:
         average_speed = np.maximum((speeds[:-1] + speeds[1:]) * 0.5, 1e-3)
         durations = np.diff(distances) / average_speed
         times = aircraft.timestamp + np.concatenate(([0.0], np.cumsum(durations)))
+        directions = np.empty_like(positions)
+        segment_directions = np.diff(positions, axis=0) / np.diff(distances)[:, None]
+        current_speed = float(np.linalg.norm(aircraft.velocity))
+        directions[0] = (
+            aircraft.velocity / current_speed
+            if current_speed > 1e-9
+            else segment_directions[0]
+        )
+        directions[-1] = segment_directions[-1]
+        for index in range(1, len(positions) - 1):
+            blended = segment_directions[index - 1] + segment_directions[index]
+            magnitude = float(np.linalg.norm(blended))
+            directions[index] = (
+                blended / magnitude if magnitude > 1e-9 else segment_directions[index]
+            )
+        velocities = directions * speeds[:, None]
         self.last_speed_profile = speeds.copy()
         self.last_sample_distances = distances.copy()
         return CubicHermiteTrajectory(
             times,
             positions,
+            velocities,
             trajectory_id=geometric.trajectory_id,
             planner_confidence=confidence,
+            speed_limits=speeds,
         )
 
     def _build_recovery_trajectory(self, aircraft: AircraftState) -> CubicHermiteTrajectory:

@@ -32,7 +32,10 @@ class SimulationOnlyExecutionGuard:
 
     _SIMULATOR_ADAPTERS = frozenset({"px4_sitl", "sitl", "simulation", "simulator", "mock"})
     _SIMULATION_CAPABILITIES = frozenset({"simulation", "simulator", "sitl"})
-    _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+    _LOCAL_HOSTS = frozenset(
+        {"localhost", "127.0.0.1", "::1", "0.0.0.0", "::", ""}
+    )
+    _SITL_SCHEMES = frozenset({"udp", "udpin", "udpout"})
     _MIN_SITL_PORT = 14540
     _MAX_SITL_PORT = 14580
 
@@ -59,7 +62,7 @@ class SimulationOnlyExecutionGuard:
             raise AutonomousExecutionRejected("adapter does not advertise a simulation capability")
 
         parsed = urlparse(endpoint)
-        if parsed.scheme.lower() != "udp":
+        if parsed.scheme.lower() not in cls._SITL_SCHEMES:
             raise AutonomousExecutionRejected("only UDP endpoints are approved for SITL")
         if parsed.hostname not in cls._LOCAL_HOSTS:
             raise AutonomousExecutionRejected("autonomous racing is restricted to local SITL endpoints")
