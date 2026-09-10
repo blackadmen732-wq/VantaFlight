@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from .api_models import (
     CameraProfileModel,
+    CourseDetailModel,
     ExperimentResultModel,
     RaceStateModel,
     RunMetricModel,
@@ -25,6 +26,7 @@ class IntelligenceRuntime:
 
     vision_status: VisionStatusModel = field(default_factory=VisionStatusModel)
     camera_profiles: dict[str, CameraProfileModel] = field(default_factory=dict)
+    courses: dict[str, CourseDetailModel] = field(default_factory=dict)
     tracks: dict[str, TargetEstimateModel] = field(default_factory=dict)
     scene: SceneStateModel = field(default_factory=SceneStateModel)
     race: RaceStateModel = field(default_factory=RaceStateModel)
