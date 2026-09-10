@@ -4,9 +4,12 @@ from .analyzer import (
     AnalysisResult,
     CourseAnalyzer,
     GateMetrics,
+    IntelligenceRunMetrics,
     RunMetrics,
     RunSample,
     SegmentMetrics,
+    ValidationSample,
+    analyze_validation,
 )
 from .experiments import (
     ExperimentRecord,
@@ -32,6 +35,7 @@ __all__ = [
     "Gate",
     "GateMetrics",
     "GenerationConfig",
+    "IntelligenceRunMetrics",
     "ParameterBounds",
     "ParameterExperiment",
     "RunMetrics",
@@ -39,5 +43,7 @@ __all__ = [
     "SafeVolume",
     "SegmentMetrics",
     "ValidationReport",
+    "ValidationSample",
+    "analyze_validation",
     "difficulty_metrics",
 ]

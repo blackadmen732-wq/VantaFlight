@@ -75,6 +75,92 @@ class AnalysisResult:
         }
 
 
+@dataclass(frozen=True)
+class ValidationSample:
+    """Time-aligned truth, perception, planning, and controller errors."""
+
+    timestamp: float
+    clearance: float | None = None
+    vision_position_error: float | None = None
+    vision_orientation_error: float | None = None
+    prediction_error: float | None = None
+    trajectory_following_error: float | None = None
+    controller_lag_s: float | None = None
+    perception_latency_s: float | None = None
+    dropped_frames: int = 0
+    target_locked: bool = True
+    recovery_event: bool = False
+
+
+@dataclass(frozen=True)
+class IntelligenceRunMetrics:
+    minimum_clearance: float | None
+    mean_vision_position_error: float | None
+    mean_vision_orientation_error: float | None
+    mean_prediction_error: float | None
+    mean_trajectory_following_error: float | None
+    mean_controller_lag_s: float | None
+    mean_perception_latency_s: float | None
+    track_losses: int
+    mean_reacquisition_s: float | None
+    dropped_frames: int
+    recovery_events: int
+
+
+def _optional_mean(values: Iterable[float | None]) -> float | None:
+    present = [float(value) for value in values if value is not None]
+    return float(np.mean(present)) if present else None
+
+
+def analyze_validation(samples: Iterable[ValidationSample]) -> IntelligenceRunMetrics:
+    """Aggregate synchronized VantaForge validation metrics for one run."""
+    data = tuple(samples)
+    if not data:
+        raise ValueError("at least one validation sample is required")
+    if any(not math.isfinite(sample.timestamp) for sample in data):
+        raise ValueError("validation timestamps must be finite")
+    if any(b.timestamp <= a.timestamp for a, b in zip(data, data[1:])):
+        raise ValueError("validation timestamps must be strictly increasing")
+
+    losses = 0
+    lost_since: float | None = None
+    reacquisition: list[float] = []
+    previously_locked = data[0].target_locked
+    if not previously_locked:
+        lost_since = data[0].timestamp
+    for sample in data[1:]:
+        if previously_locked and not sample.target_locked:
+            losses += 1
+            lost_since = sample.timestamp
+        elif not previously_locked and sample.target_locked and lost_since is not None:
+            reacquisition.append(sample.timestamp - lost_since)
+            lost_since = None
+        previously_locked = sample.target_locked
+
+    clearances = [sample.clearance for sample in data if sample.clearance is not None]
+    return IntelligenceRunMetrics(
+        minimum_clearance=min(clearances) if clearances else None,
+        mean_vision_position_error=_optional_mean(
+            sample.vision_position_error for sample in data
+        ),
+        mean_vision_orientation_error=_optional_mean(
+            sample.vision_orientation_error for sample in data
+        ),
+        mean_prediction_error=_optional_mean(sample.prediction_error for sample in data),
+        mean_trajectory_following_error=_optional_mean(
+            sample.trajectory_following_error for sample in data
+        ),
+        mean_controller_lag_s=_optional_mean(sample.controller_lag_s for sample in data),
+        mean_perception_latency_s=_optional_mean(
+            sample.perception_latency_s for sample in data
+        ),
+        track_losses=losses,
+        mean_reacquisition_s=float(np.mean(reacquisition)) if reacquisition else None,
+        dropped_frames=max(sample.dropped_frames for sample in data),
+        recovery_events=sum(sample.recovery_event for sample in data),
+    )
+
+
 def _sample_from(value: RunSample | Mapping[str, Any] | Sequence[Any]) -> RunSample:
     if isinstance(value, RunSample):
         return value
