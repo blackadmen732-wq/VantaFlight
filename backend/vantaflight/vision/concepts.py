@@ -276,6 +276,11 @@ class TargetProfile:
                 raise ValueError("invalid HSV color range")
         if min_area_px < 0 or max_area_px < min_area_px:
             raise ValueError("invalid area limits")
+        if (
+            len(orientation_range_deg) != 2
+            or not all(np.isfinite(value) and -180 <= value <= 180 for value in orientation_range_deg)
+        ):
+            raise ValueError("orientation range must contain angles in [-180, 180]")
         values = {
             "profile_id": profile_id or name, "name": name, "target_type": target_type,
             "physical_width_m": float(width), "physical_height_m": float(height),
@@ -428,6 +433,7 @@ class PoseEstimate:
     raw_success: bool
     valid: bool
     reason: str = ""
+    translation_covariance_m2: np.ndarray | None = None
 
     @property
     def distance_m(self) -> float:
@@ -468,6 +474,8 @@ class AircraftState:
     timestamp: float
     position_ned_m: np.ndarray = field(default_factory=lambda: np.zeros(3))
     velocity_ned_mps: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    # Rotation/local rigid offset from body FRD to world NED. The aircraft's
+    # world translation is carried separately by position_ned_m.
     body_to_world: np.ndarray = field(default_factory=lambda: np.eye(4))
 
     def __post_init__(self) -> None:

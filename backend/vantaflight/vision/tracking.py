@@ -72,7 +72,10 @@ class KalmanTargetTracker:
             raise RuntimeError("tracker has no initial measurement")
         if timestamp < self.timestamp:
             raise ValueError("timestamps must be monotonic")
-        dt = float(np.clip(timestamp - self.timestamp, self.config.min_dt_s, self.config.max_dt_s))
+        elapsed = timestamp - self.timestamp
+        if elapsed == 0:
+            return self.snapshot(False)
+        dt = float(np.clip(elapsed, self.config.min_dt_s, self.config.max_dt_s))
         transition, process = self._transition(dt)
         self.state = transition @ self.state
         self.covariance = transition @ self.covariance @ transition.T + process

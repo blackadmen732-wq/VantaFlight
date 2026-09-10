@@ -39,7 +39,12 @@ from .lock import LockConfig, LockSnapshot, LockState, TargetLock
 from .optical_flow import OpticalFlowResult, PyramidalLK
 from .pipeline import VisionPipeline, VisionPipelineResult
 from .pose import PoseConfig, PoseEstimator, PoseResult
-from .preprocess import OpenCVPreprocessor, PreprocessConfig, PreprocessResult
+from .preprocess import (
+    OpenCVPreprocessor,
+    PixelColorSpace,
+    PreprocessConfig,
+    PreprocessResult,
+)
 from .roi import ROIPolicyConfig, ROISearchPolicy, ROIState
 from .scene import SceneObject, VantaScene
 from .synthetic import (
@@ -74,7 +79,8 @@ __all__ = [
     "KalmanTargetTracker", "LatencyTimeline", "LockConfig", "LockSnapshot", "LockState",
     "MultiTargetTracker", "NetworkCameraSource", "ObservedPose3D", "ONNXDetector",
     "OpenCVPreprocessor", "OpticalFlowResult", "PoseConfig", "PoseEstimate", "PoseEstimator",
-    "PoseResult", "PredictedPose3D", "PreprocessConfig", "PreprocessResult", "PreviewBuffer",
+    "PixelColorSpace", "PoseResult", "PredictedPose3D", "PreprocessConfig",
+    "PreprocessResult", "PreviewBuffer",
     "PreviewBufferMetrics", "PyramidalLK", "ROIPolicyConfig", "ROISearchPolicy", "ROIState", "SceneObject",
     "SyntheticCameraSource", "SyntheticTargetSpec", "TargetCandidate", "TargetLock", "TargetProfile",
     "TargetTrack", "TrackSnapshot", "TrackStatus", "TrackerConfig", "USBCameraSource",
