@@ -187,7 +187,7 @@ def test_invalid_experiment_candidate_is_recorded_instead_of_aborting():
     assert len(records) == 1
     assert records[0].candidate == {"min_gate_size": 4.0, "max_gate_size": 2.0}
     assert records[0].score is None
-    assert "gate size range is invalid" in (records[0].error or "")
+    assert "gate size bounds are invalid" in (records[0].error or "")
     assert experiment.records == list(records)
 
 
