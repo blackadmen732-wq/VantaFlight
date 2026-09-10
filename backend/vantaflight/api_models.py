@@ -198,3 +198,8 @@ class AutoCurriculumRequest(BaseModel):
     tiers: list[str] | None = None
     seeds_per_tier: int = Field(default=3, ge=1, le=100)
     gate_counts_per_tier: int = Field(default=2, ge=1, le=10)
+
+
+class HardwareModeTransitionRequest(BaseModel):
+    target: str
+    reason: str = "operator"

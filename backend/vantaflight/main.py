@@ -19,6 +19,7 @@ from .api_models import (
     CourseGenerationRequest,
     CourseValidationModel,
     ExperimentResultModel,
+    HardwareModeTransitionRequest,
     RaceStateModel,
     RunMetricModel,
     SceneStateModel,
@@ -438,10 +439,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/hardware-mode")
     async def hardware_mode() -> dict:
         return hw_mode_manager.to_dict()
-
-    class HardwareModeTransitionRequest(BaseModel):
-        target: str
-        reason: str = "operator"
 
     @app.post("/api/hardware-mode/transition")
     async def hardware_mode_transition(req: HardwareModeTransitionRequest) -> dict:
