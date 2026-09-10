@@ -23,6 +23,12 @@ from .trajectory import (
     lookahead_gate_position,
     trajectory_through_gates,
 )
+from .vanta_execution import (
+    ExecutionMetrics,
+    ExecutionMode,
+    OffboardSetpoint,
+    VantaExecution,
+)
 
 __all__ = [
     "AircraftState",
@@ -30,8 +36,11 @@ __all__ = [
     "CubicHermiteTrajectory",
     "DesiredTrajectoryState",
     "ExecutionCapabilities",
+    "ExecutionMetrics",
+    "ExecutionMode",
     "GateTarget",
     "LookaheadConfig",
+    "OffboardSetpoint",
     "RaceEvent",
     "RaceState",
     "RaceStateMachine",
@@ -41,6 +50,7 @@ __all__ = [
     "SimulationOnlyExecutionGuard",
     "SpeedEnvelopeConfig",
     "TargetSlot",
+    "VantaExecution",
     "VantaRace",
     "VantaRaceConfig",
     "lookahead_gate_position",
