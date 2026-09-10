@@ -91,6 +91,28 @@ class ValidationSample:
     target_locked: bool = True
     recovery_event: bool = False
 
+    def __post_init__(self) -> None:
+        numeric = (
+            "timestamp",
+            "clearance",
+            "vision_position_error",
+            "vision_orientation_error",
+            "prediction_error",
+            "trajectory_following_error",
+            "controller_lag_s",
+            "perception_latency_s",
+        )
+        for name in numeric:
+            value = getattr(self, name)
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+        if (
+            isinstance(self.dropped_frames, bool)
+            or not isinstance(self.dropped_frames, int)
+            or self.dropped_frames < 0
+        ):
+            raise ValueError("dropped_frames must be a nonnegative integer")
+
 
 @dataclass(frozen=True)
 class IntelligenceRunMetrics:
@@ -206,7 +228,7 @@ class CourseAnalyzer:
         speeds = np.maximum(speeds, 0.0)
 
         gate_metrics: list[GateMetrics] = []
-        crossing_indices: list[int | None] = []
+        crossings: list[tuple[int, float, np.ndarray, float, float] | None] = []
         search_start = 0
         for gate in course.gates:
             signed = np.asarray([
@@ -223,21 +245,22 @@ class CourseAnalyzer:
                         found = (index, float(alpha), crossing)
                         break
             if found is None:
-                crossing_indices.append(None)
+                crossings.append(None)
                 gate_metrics.append(GateMetrics(gate.order, False, None, 0.0, math.inf, 0.0, 0.0, 0.0))
                 continue
 
             index, alpha, crossing = found
             search_start = index + 1
-            crossing_indices.append(index)
             crossing_speed = float(speeds[index] * (1 - alpha) + speeds[index + 1] * alpha)
+            crossing_time = float(times[index] + alpha * dt[index])
+            crossings.append((index, alpha, crossing, crossing_time, crossing_speed))
             approach = float(np.mean(speeds[max(0, index - 2): index + 1]))
             exit_speed = float(np.mean(speeds[index + 1: min(len(speeds), index + 4)]))
             loss = max(0.0, approach - exit_speed)
             gate_metrics.append(GateMetrics(
                 gate_order=gate.order,
                 passed=True,
-                timestamp=float(times[index] + alpha * dt[index]),
+                timestamp=crossing_time,
                 crossing_speed=crossing_speed,
                 center_error=float(np.linalg.norm(crossing - np.asarray(gate.center))),
                 approach_speed=approach,
@@ -246,16 +269,30 @@ class CourseAnalyzer:
             ))
 
         segments: list[SegmentMetrics] = []
-        passed = [(metric.gate_order, index) for metric, index in zip(gate_metrics, crossing_indices) if index is not None]
+        passed = [
+            (metric.gate_order, crossing)
+            for metric, crossing in zip(gate_metrics, crossings)
+            if crossing is not None
+        ]
         for (start_order, start), (end_order, end) in zip(passed, passed[1:]):
             assert start is not None and end is not None
-            end_index = min(end + 1, len(data) - 1)
+            start_index, _, start_position, start_time, start_speed = start
+            end_index, _, end_position, end_time, end_speed = end
+            section_points = np.vstack((
+                start_position,
+                positions[start_index + 1:end_index + 1],
+                end_position,
+            ))
             section_distance = float(np.linalg.norm(
-                np.diff(positions[start:end_index + 1], axis=0), axis=1
+                np.diff(section_points, axis=0), axis=1
             ).sum())
-            duration = float(times[end_index] - times[start])
-            section_speeds = speeds[start:end_index + 1]
-            start_speed, minimum_speed = float(section_speeds[0]), float(np.min(section_speeds))
+            duration = end_time - start_time
+            section_speeds = np.concatenate((
+                [start_speed],
+                speeds[start_index + 1:end_index + 1],
+                [end_speed],
+            ))
+            minimum_speed = float(np.min(section_speeds))
             segments.append(SegmentMetrics(
                 start_gate=start_order,
                 end_gate=end_order,
@@ -279,7 +316,10 @@ class CourseAnalyzer:
             maximum_speed=float(np.max(speeds)),
             minimum_speed=float(np.min(speeds)),
             gates_passed=sum(metric.passed for metric in gate_metrics),
-            completion_ratio=sum(metric.passed for metric in gate_metrics) / len(course.gates),
+            completion_ratio=(
+                sum(metric.passed for metric in gate_metrics) / len(course.gates)
+                if course.gates else 0.0
+            ),
             total_speed_loss=float(sum(metric.speed_loss for metric in gate_metrics)),
         )
         return AnalysisResult(run, tuple(gate_metrics), tuple(segments), losses)
