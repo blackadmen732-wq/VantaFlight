@@ -42,7 +42,7 @@ function FlightDashboard() {
         if (!frame.data.connected) setTwin(null);
       } else if (frame.type === "twin") {
         setTwin(frame.data);
-      } else {
+      } else if (frame.type === "event") {
         pushEvent(frame.data);
       }
     }, setStreamOnline);
