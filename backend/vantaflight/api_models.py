@@ -114,7 +114,7 @@ class ExperimentResultModel(BaseModel):
 class CourseGenerationRequest(BaseModel):
     seed: int
     mode: str = "RANDOM"
-    gate_count: int = Field(default=8, ge=2, le=64)
+    gate_count: int = Field(default=8, ge=3, le=64)
     width: float = Field(default=30.0, gt=0)
     length: float = Field(default=50.0, gt=0)
     height: float = Field(default=12.0, gt=0)

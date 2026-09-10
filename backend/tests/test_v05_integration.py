@@ -151,6 +151,7 @@ def test_truth_store_keeps_truth_outside_perception_inputs():
 def test_v05_api_contracts_are_typed_and_image_free():
     app = create_app(db_path=":memory:")
     with TestClient(app) as client:
+        assert app.state.recorder.metrics.running is True
         assert client.get("/api/vision/status").json()["lock_state"] == "SEARCHING"
         assert client.get("/api/vision/camera-profiles").json() == []
         assert client.get("/api/vision/tracks").json() == []
@@ -164,3 +165,34 @@ def test_v05_api_contracts_are_typed_and_image_free():
             first = ws.receive_json()
             assert first["type"] == "telemetry"
             assert "image" not in first["data"]
+    assert app.state.recorder.metrics.running is False
+
+
+def test_course_api_generates_validates_persists_and_reloads(tmp_path):
+    path = tmp_path / "courses.db"
+    app = create_app(db_path=str(path))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/courses/generate",
+            json={
+                "seed": 17,
+                "mode": "SPEED_RUN",
+                "gate_count": 5,
+                "width": 30,
+                "length": 60,
+                "height": 15,
+                "floor": 0,
+                "ceiling": 15,
+                "boundary_margin": 1,
+            },
+        )
+        assert response.status_code == 200, response.text
+        course_id = response.json()["id"]
+        validation = client.get(f"/api/courses/{course_id}/validation").json()
+        assert validation["valid"] is True
+
+    restarted = create_app(db_path=str(path))
+    with TestClient(restarted) as client:
+        loaded = client.get(f"/api/courses/{course_id}")
+        assert loaded.status_code == 200
+        assert loaded.json()["seed"] == 17

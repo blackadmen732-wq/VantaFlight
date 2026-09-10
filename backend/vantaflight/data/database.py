@@ -240,7 +240,7 @@ class FlightDatabase:
                 raise
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
-            (CURRENT_SCHEMA_VERSION,),
+            (2,),
         )
         self._conn.commit()
 
@@ -264,72 +264,77 @@ class FlightDatabase:
         connection_type: str = "SIMULATED",
         software_version: str = "0.5.0",
     ) -> int:
-        cur = self._conn.execute(
-            "INSERT INTO flights (started_at, drone_id, drone_name, status, "
-            "adapter_type, is_simulated, connection_type, software_version) "
-            "VALUES (?, ?, ?, 'active', ?, ?, ?, ?)",
-            (time.time(), drone_id, drone_name, adapter_type,
-             int(is_simulated), connection_type, software_version),
-        )
-        self._conn.commit()
-        return int(cur.lastrowid)
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO flights (started_at, drone_id, drone_name, status, "
+                "adapter_type, is_simulated, connection_type, software_version) "
+                "VALUES (?, ?, ?, 'active', ?, ?, ?, ?)",
+                (time.time(), drone_id, drone_name, adapter_type,
+                 int(is_simulated), connection_type, software_version),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
 
     def end_flight(self, flight_id: int, status: str = "completed") -> None:
-        self._conn.execute(
-            "UPDATE flights SET ended_at = ?, status = ? WHERE id = ?",
-            (time.time(), status, flight_id),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE flights SET ended_at = ?, status = ? WHERE id = ?",
+                (time.time(), status, flight_id),
+            )
+            self._conn.commit()
 
     # -- writes -------------------------------------------------------------
     def record_telemetry(self, flight_id: int, t: Telemetry) -> None:
-        self._conn.execute(
-            "INSERT INTO telemetry_samples (flight_id, timestamp, connected, armed, "
-            "flight_mode, x, y, z, altitude, velocity, heading, battery_percentage, "
-            "connection_quality, latitude, longitude, ground_speed) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                flight_id,
-                t.timestamp,
-                int(t.connected),
-                int(t.armed),
-                t.flight_mode.value,
-                t.x,
-                t.y,
-                t.z,
-                t.altitude,
-                t.velocity,
-                t.heading,
-                t.battery_percentage,
-                t.connection_quality.value,
-                t.latitude,
-                t.longitude,
-                t.ground_speed,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO telemetry_samples (flight_id, timestamp, connected, armed, "
+                "flight_mode, x, y, z, altitude, velocity, heading, battery_percentage, "
+                "connection_quality, latitude, longitude, ground_speed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    flight_id,
+                    t.timestamp,
+                    int(t.connected),
+                    int(t.armed),
+                    t.flight_mode.value,
+                    t.x,
+                    t.y,
+                    t.z,
+                    t.altitude,
+                    t.velocity,
+                    t.heading,
+                    t.battery_percentage,
+                    t.connection_quality.value,
+                    t.latitude,
+                    t.longitude,
+                    t.ground_speed,
+                ),
+            )
+            self._conn.commit()
 
     def record_event(self, flight_id: int, event: FlightEvent) -> None:
-        self._conn.execute(
-            "INSERT INTO flight_events (flight_id, timestamp, event_type, message) "
-            "VALUES (?, ?, ?, ?)",
-            (flight_id, event.timestamp, event.event_type, event.message),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO flight_events (flight_id, timestamp, event_type, message) "
+                "VALUES (?, ?, ?, ?)",
+                (flight_id, event.timestamp, event.event_type, event.message),
+            )
+            self._conn.commit()
 
     def record_command(self, flight_id: int, result: CommandResult) -> None:
-        self._conn.execute(
-            "INSERT INTO commands (flight_id, timestamp, command, accepted, message) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                flight_id,
-                result.timestamp,
-                result.command,
-                int(result.accepted),
-                result.message,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO commands (flight_id, timestamp, command, accepted, message) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    flight_id,
+                    result.timestamp,
+                    result.command,
+                    int(result.accepted),
+                    result.message,
+                ),
+            )
+            self._conn.commit()
 
     # -- reads --------------------------------------------------------------
     def count_telemetry(self, flight_id: int) -> int:
@@ -461,6 +466,13 @@ class FlightDatabase:
                 ],
             )
             self._conn.commit()
+
+    def get_course(self, course_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT course_json FROM courses WHERE id = ?", (course_id,)
+            ).fetchone()
+        return json.loads(row["course_json"]) if row else None
 
     def start_simulation_run(
         self,

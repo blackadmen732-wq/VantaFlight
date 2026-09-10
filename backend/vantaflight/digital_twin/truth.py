@@ -71,7 +71,12 @@ class DigitalTwinTruthStore:
         del self._truth[:-self._capacity]
 
     def add_validation(self, frame: ValidationFrame) -> None:
-        if frame.simulator_truth not in self._truth:
+        matching_truth = any(
+            candidate.timestamp == frame.simulator_truth.timestamp
+            and candidate.course_id == frame.simulator_truth.course_id
+            for candidate in self._truth
+        )
+        if not matching_truth:
             raise ValueError("validation must reference recorded simulator truth")
         self._validation.append(frame)
         del self._validation[:-self._capacity]

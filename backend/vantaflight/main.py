@@ -27,7 +27,7 @@ from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_
 from .connection import ConnectionManager, DiscoveredDrone
 from .core import FlightController
 from .course_lab import CourseGenerator, CourseValidator, SafeVolume
-from .data import FlightDatabase
+from .data import AsyncRecorder, FlightDatabase
 from .intelligence import IntelligenceRuntime
 from .models import AdapterType
 
@@ -71,6 +71,7 @@ class ConnectionHub:
 def create_app(db_path: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        await recorder.start()
         app.state.stream_task = asyncio.create_task(stream_loop())
         try:
             yield
@@ -80,6 +81,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            await recorder.stop()
             db.close()
 
     app = FastAPI(
@@ -95,6 +97,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     )
 
     db = FlightDatabase(db_path or DB_PATH)
+    recorder = AsyncRecorder(db)
     connection_manager = ConnectionManager()
     controller = FlightController(db, connection_manager=connection_manager)
     hub = ConnectionHub()
@@ -102,6 +105,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.db = db
     app.state.controller = controller
     app.state.hub = hub
+    app.state.recorder = recorder
     app.state.intelligence = intelligence
 
     async def stream_loop() -> None:
@@ -315,7 +319,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def course_details(course_id: str) -> CourseDetailModel:
         result = intelligence.courses.get(course_id)
         if result is None:
-            raise HTTPException(status_code=404, detail="course not found")
+            stored = db.get_course(course_id)
+            if stored is None:
+                raise HTTPException(status_code=404, detail="course not found")
+            result = CourseDetailModel.model_validate(stored)
+            intelligence.courses[course_id] = result
         return result
 
     @app.get(
@@ -324,7 +332,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def validate_course(course_id: str) -> CourseValidationModel:
         result = intelligence.courses.get(course_id)
         if result is None:
-            raise HTTPException(status_code=404, detail="course not found")
+            stored = db.get_course(course_id)
+            if stored is None:
+                raise HTTPException(status_code=404, detail="course not found")
+            result = CourseDetailModel.model_validate(stored)
+            intelligence.courses[course_id] = result
         from .course_lab import Course
 
         payload = result.model_dump(mode="json")
