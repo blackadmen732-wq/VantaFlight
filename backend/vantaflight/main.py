@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import time
 from contextlib import asynccontextmanager
 
@@ -301,7 +303,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         payload = course.to_dict()
-        course_id = f"{course.mode.value.lower()}-{course.seed}-{len(course.gates)}"
+        identity_payload = {
+            "mode": course.mode.value,
+            "seed": course.seed,
+            "gate_count": len(course.gates),
+            "volume": payload["volume"],
+        }
+        identity_hash = hashlib.sha256(
+            json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+        course_id = f"{course.mode.value.lower()}-{course.seed}-{identity_hash}"
         detail = CourseDetailModel(
             id=course_id,
             seed=course.seed,

@@ -1,11 +1,12 @@
 """Typed V0.5 REST and WebSocket contracts."""
 from __future__ import annotations
 
+import math
 import time
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WebSocketEventType(str, Enum):
@@ -129,8 +130,16 @@ class CourseGenerationRequest(BaseModel):
     length: float = Field(default=50.0, gt=0)
     height: float = Field(default=12.0, gt=0)
     floor: float = 0.0
-    ceiling: float = 12.0
+    ceiling: float | None = None
     boundary_margin: float = Field(default=1.5, ge=0)
+
+    @model_validator(mode="after")
+    def validate_vertical_bounds(self) -> "CourseGenerationRequest":
+        if self.ceiling is not None and not math.isclose(
+            self.ceiling, self.floor + self.height
+        ):
+            raise ValueError("ceiling must equal floor + height")
+        return self
 
 
 class CourseDetailModel(BaseModel):
