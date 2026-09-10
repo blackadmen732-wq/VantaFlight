@@ -505,63 +505,68 @@ class FlightDatabase:
     def record_v05_batch(self, records: list[dict[str, Any]]) -> None:
         """Write a heterogeneous recorder batch in one transaction."""
         with self._lock:
-            for record in records:
-                kind = record["kind"]
-                payload = record["payload"]
-                if kind == "vision_measurement":
-                    self._conn.execute(
-                        "INSERT INTO vision_measurements "
-                        "(run_id, frame_id, target_id, captured_at, recorded_at, measurement_json) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            payload.get("run_id"),
-                            payload["frame_id"],
-                            payload.get("target_id"),
-                            float(payload["captured_at"]),
-                            time.time(),
-                            json.dumps(payload, separators=(",", ":")),
-                        ),
-                    )
-                elif kind == "target_track":
-                    self._conn.execute(
-                        "INSERT INTO target_tracks "
-                        "(run_id, target_id, timestamp, track_json) VALUES (?, ?, ?, ?)",
-                        (
-                            payload.get("run_id"),
-                            payload["target_id"],
-                            float(payload["timestamp"]),
-                            json.dumps(payload, separators=(",", ":")),
-                        ),
-                    )
-                elif kind == "trajectory_point":
-                    self._conn.execute(
-                        "INSERT INTO trajectory_points "
-                        "(run_id, trajectory_id, timestamp, point_json) VALUES (?, ?, ?, ?)",
-                        (
-                            payload.get("run_id"),
-                            payload["trajectory_id"],
-                            float(payload["timestamp"]),
-                            json.dumps(payload, separators=(",", ":")),
-                        ),
-                    )
-                elif kind == "run_metric":
-                    self._conn.execute(
-                        "INSERT INTO run_metrics "
-                        "(run_id, scope, scope_id, metric_name, metric_value, unit, timestamp) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            payload.get("run_id"),
-                            payload.get("scope", "run"),
-                            payload.get("scope_id"),
-                            payload["metric_name"],
-                            float(payload["metric_value"]),
-                            payload.get("unit"),
-                            float(payload.get("timestamp", time.time())),
-                        ),
-                    )
-                else:
-                    raise ValueError(f"unsupported recorder record kind: {kind}")
-            self._conn.commit()
+            try:
+                for record in records:
+                    kind = record["kind"]
+                    payload = record["payload"]
+                    if kind == "vision_measurement":
+                        self._conn.execute(
+                            "INSERT INTO vision_measurements "
+                            "(run_id, frame_id, target_id, captured_at, recorded_at, measurement_json) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                payload.get("run_id"),
+                                payload["frame_id"],
+                                payload.get("target_id"),
+                                float(payload["captured_at"]),
+                                time.time(),
+                                json.dumps(payload, separators=(",", ":")),
+                            ),
+                        )
+                    elif kind == "target_track":
+                        self._conn.execute(
+                            "INSERT INTO target_tracks "
+                            "(run_id, target_id, timestamp, track_json) VALUES (?, ?, ?, ?)",
+                            (
+                                payload.get("run_id"),
+                                payload["target_id"],
+                                float(payload["timestamp"]),
+                                json.dumps(payload, separators=(",", ":")),
+                            ),
+                        )
+                    elif kind == "trajectory_point":
+                        self._conn.execute(
+                            "INSERT INTO trajectory_points "
+                            "(run_id, trajectory_id, timestamp, point_json) VALUES (?, ?, ?, ?)",
+                            (
+                                payload.get("run_id"),
+                                payload["trajectory_id"],
+                                float(payload["timestamp"]),
+                                json.dumps(payload, separators=(",", ":")),
+                            ),
+                        )
+                    elif kind == "run_metric":
+                        self._conn.execute(
+                            "INSERT INTO run_metrics "
+                            "(run_id, scope, scope_id, metric_name, metric_value, unit, timestamp) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                payload.get("run_id"),
+                                payload.get("scope", "run"),
+                                payload.get("scope_id"),
+                                payload["metric_name"],
+                                float(payload["metric_value"]),
+                                payload.get("unit"),
+                                float(payload.get("timestamp", time.time())),
+                            ),
+                        )
+                    else:
+                        raise ValueError(f"unsupported recorder record kind: {kind}")
+            except Exception:
+                self._conn.rollback()
+                raise
+            else:
+                self._conn.commit()
 
     def get_v05_counts(self) -> dict[str, int]:
         names = (

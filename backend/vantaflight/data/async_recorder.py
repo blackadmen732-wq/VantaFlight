@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from .database import FlightDatabase
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,13 @@ class AsyncRecorder:
         await asyncio.to_thread(self._database.record_v05_batch, batch)
         self._written += len(batch)
 
+    async def _flush(self, batch: list[dict[str, Any]]) -> None:
+        try:
+            await self._write(batch)
+        except Exception:
+            self._dropped += len(batch)
+            logger.exception("failed to persist asynchronous recorder batch")
+
     async def _run(self) -> None:
         batch: list[dict[str, Any]] = []
         stopping = False
@@ -120,8 +130,8 @@ class AsyncRecorder:
             if batch and (
                 stopping or len(batch) >= self._batch_size or item is None
             ):
-                await self._write(batch)
+                await self._flush(batch)
                 batch = []
 
         if batch:
-            await self._write(batch)
+            await self._flush(batch)
