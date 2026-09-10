@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { api } from "../api";
 import RunSummaryCard from "../components/RunSummaryCard";
 import type { RunSummary } from "../types";
 
@@ -78,10 +79,39 @@ describe("RunSummaryCard", () => {
   });
 });
 
+describe("api GET requests", () => {
+  it("rejects non-2xx JSON responses instead of returning error bodies", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 404,
+    } as Response);
+
+    await expect(api.course("missing/course")).rejects.toThrow(
+      "request failed: 404",
+    );
+    expect(fetchMock).toHaveBeenCalledWith("/api/courses/missing%2Fcourse");
+    fetchMock.mockRestore();
+  });
+
+  it("returns decoded JSON for successful GET responses", async () => {
+    const payload = { status: "ok", version: "0.5.0" };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue(payload),
+    } as unknown as Response);
+
+    await expect(api.health()).resolves.toEqual(payload);
+    fetchMock.mockRestore();
+  });
+});
+
 describe("AdapterSelector", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
       json: () => Promise.resolve({
         drones: [
           { drone_id: "mock-0", name: "Mock Drone", adapter_type: "mock", transport: "SIMULATED", address: "in-process", capabilities: ["arm"] },

@@ -3,17 +3,34 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from .api_models import (
+    CameraProfileModel,
+    CourseDetailModel,
+    CourseGenerationRequest,
+    CourseValidationModel,
+    ExperimentResultModel,
+    RaceStateModel,
+    RunMetricModel,
+    SceneStateModel,
+    SimulationStateModel,
+    TargetEstimateModel,
+    VisionStatusModel,
+)
 from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_VERSION
 from .connection import ConnectionManager, DiscoveredDrone
 from .core import FlightController
-from .data import FlightDatabase
+from .course_lab import CourseGenerator, CourseValidator, SafeVolume
+from .data import AsyncRecorder, FlightDatabase
+from .intelligence import IntelligenceRuntime
 from .models import AdapterType
 
 
@@ -56,6 +73,7 @@ class ConnectionHub:
 def create_app(db_path: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        await recorder.start()
         app.state.stream_task = asyncio.create_task(stream_loop())
         try:
             yield
@@ -65,6 +83,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            await recorder.stop()
             db.close()
 
     app = FastAPI(
@@ -80,12 +99,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
     )
 
     db = FlightDatabase(db_path or DB_PATH)
+    recorder = AsyncRecorder(db)
     connection_manager = ConnectionManager()
     controller = FlightController(db, connection_manager=connection_manager)
     hub = ConnectionHub()
+    intelligence = IntelligenceRuntime()
     app.state.db = db
     app.state.controller = controller
     app.state.hub = hub
+    app.state.recorder = recorder
+    app.state.intelligence = intelligence
 
     async def stream_loop() -> None:
         period = 1.0 / STREAM_HZ
@@ -97,6 +120,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 await hub.broadcast({"type": "event", "data": event.model_dump(mode="json")})
             if controller.twin.active:
                 await hub.broadcast({"type": "twin", "data": controller.twin.state.to_dict()})
+            await hub.broadcast(
+                {
+                    "type": "vision_state",
+                    "data": intelligence.vision_status.model_dump(mode="json"),
+                }
+            )
+            await hub.broadcast(
+                {"type": "scene_state", "data": intelligence.scene.model_dump(mode="json")}
+            )
+            await hub.broadcast(
+                {"type": "race_state", "data": intelligence.race.model_dump(mode="json")}
+            )
+            await hub.broadcast(
+                {
+                    "type": "simulation_state",
+                    "data": intelligence.simulation.model_dump(mode="json"),
+                }
+            )
             elapsed = time.monotonic() - t_start
             await asyncio.sleep(max(0, period - elapsed))
 
@@ -212,6 +253,120 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "metrics": controller.metrics.to_dict(),
             "twin_active": controller.twin.active,
         }
+
+    # -- V0.5 backend-intelligence contracts -------------------------------
+    @app.get("/api/vision/status", response_model=VisionStatusModel)
+    async def vision_status() -> VisionStatusModel:
+        return intelligence.vision_status
+
+    @app.get("/api/vision/camera-profiles", response_model=list[CameraProfileModel])
+    async def camera_profiles() -> list[CameraProfileModel]:
+        return list(intelligence.camera_profiles.values())
+
+    @app.get("/api/vision/tracks", response_model=list[TargetEstimateModel])
+    async def vision_tracks() -> list[TargetEstimateModel]:
+        return list(intelligence.tracks.values())
+
+    @app.get("/api/scene", response_model=SceneStateModel)
+    async def scene_state() -> SceneStateModel:
+        return intelligence.scene
+
+    @app.get("/api/race", response_model=RaceStateModel)
+    async def race_state() -> RaceStateModel:
+        return intelligence.race
+
+    @app.get("/api/simulation/status", response_model=SimulationStateModel)
+    async def simulation_status() -> SimulationStateModel:
+        return intelligence.simulation
+
+    @app.get("/api/run-metrics", response_model=list[RunMetricModel])
+    async def run_metrics() -> list[RunMetricModel]:
+        return list(intelligence.run_metrics)
+
+    @app.get("/api/experiments", response_model=list[ExperimentResultModel])
+    async def experiment_results() -> list[ExperimentResultModel]:
+        return list(intelligence.experiments)
+
+    @app.post("/api/courses/generate", response_model=CourseDetailModel)
+    async def generate_course(req: CourseGenerationRequest) -> CourseDetailModel:
+        try:
+            volume = SafeVolume(
+                dimensions=(req.width, req.length, req.height),
+                floor=req.floor,
+                ceiling=req.ceiling,
+                boundary_margin=req.boundary_margin,
+            )
+            course = CourseGenerator(volume).generate(
+                req.mode, seed=req.seed, gate_count=req.gate_count
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        payload = course.to_dict()
+        identity_payload = {
+            "mode": course.mode.value,
+            "seed": course.seed,
+            "gate_count": len(course.gates),
+            "volume": payload["volume"],
+        }
+        identity_hash = hashlib.sha256(
+            json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+        course_id = f"{course.mode.value.lower()}-{course.seed}-{identity_hash}"
+        detail = CourseDetailModel(
+            id=course_id,
+            seed=course.seed,
+            mode=course.mode.value,
+            safe_volume=payload["volume"],
+            path=payload["path"],
+            gates=payload["gates"],
+            difficulty=dict(course.difficulty),
+        )
+        intelligence.courses[course_id] = detail
+        db.save_course(detail.model_dump(mode="json"))
+        return detail
+
+    @app.get("/api/courses/{course_id}", response_model=CourseDetailModel)
+    async def course_details(course_id: str) -> CourseDetailModel:
+        result = intelligence.courses.get(course_id)
+        if result is None:
+            stored = db.get_course(course_id)
+            if stored is None:
+                raise HTTPException(status_code=404, detail="course not found")
+            result = CourseDetailModel.model_validate(stored)
+            intelligence.courses[course_id] = result
+        return result
+
+    @app.get(
+        "/api/courses/{course_id}/validation", response_model=CourseValidationModel
+    )
+    async def validate_course(course_id: str) -> CourseValidationModel:
+        result = intelligence.courses.get(course_id)
+        if result is None:
+            stored = db.get_course(course_id)
+            if stored is None:
+                raise HTTPException(status_code=404, detail="course not found")
+            result = CourseDetailModel.model_validate(stored)
+            intelligence.courses[course_id] = result
+        from .course_lab import Course
+
+        payload = result.model_dump(mode="json")
+        course = Course.from_dict(
+            {
+                "mode": payload["mode"],
+                "seed": payload["seed"],
+                "volume": payload["safe_volume"],
+                "path": payload["path"],
+                "gates": payload["gates"],
+                "difficulty": payload["difficulty"],
+            }
+        )
+        report = CourseValidator().validate(course)
+        return CourseValidationModel(
+            course_id=course_id,
+            valid=report.valid,
+            errors=list(report.errors),
+        )
 
     # -- WebSocket ----------------------------------------------------------
     @app.websocket("/ws/telemetry")
