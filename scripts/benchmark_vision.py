@@ -132,7 +132,7 @@ def run_benchmark(frames: int, burst: int, seed: int) -> dict[str, float | int]:
             )
         )
         tracking_ms.append(duration)
-        tracked += int(snapshot.initialized)
+        tracked += int(snapshot.status.value != "lost")
 
         evidence = []
         if candidate is not None:
