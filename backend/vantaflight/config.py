@@ -40,4 +40,4 @@ TELEMETRY_STALE_TIMEOUT: float = float(
     os.environ.get("VANTAFLIGHT_TELEMETRY_STALE_TIMEOUT", "3.0")
 )
 
-SOFTWARE_VERSION: str = "0.3.0"
+SOFTWARE_VERSION: str = "0.5.0"

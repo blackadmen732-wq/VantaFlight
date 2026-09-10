@@ -262,7 +262,7 @@ class FlightDatabase:
         adapter_type: str = "mock",
         is_simulated: bool = True,
         connection_type: str = "SIMULATED",
-        software_version: str = "0.3.0",
+        software_version: str = "0.5.0",
     ) -> int:
         cur = self._conn.execute(
             "INSERT INTO flights (started_at, drone_id, drone_name, status, "
@@ -569,6 +569,77 @@ class FlightDatabase:
                 name: int(self._conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0])
                 for name in names
             }
+
+    def save_algorithm_configuration(
+        self,
+        configuration_id: str,
+        name: str,
+        values: dict[str, Any],
+        *,
+        is_default: bool = False,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO algorithm_configurations "
+                "(id, name, values_json, is_default, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    configuration_id,
+                    name,
+                    json.dumps(values, separators=(",", ":")),
+                    int(is_default),
+                    time.time(),
+                ),
+            )
+            self._conn.commit()
+
+    def record_parameter_experiment(
+        self,
+        experiment_id: str,
+        candidate: dict[str, Any],
+        *,
+        configuration_id: str | None = None,
+        score: float | None = None,
+        status: str = "candidate",
+    ) -> int:
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT INTO parameter_experiments "
+                "(experiment_id, configuration_id, candidate_json, score, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    experiment_id,
+                    configuration_id,
+                    json.dumps(candidate, separators=(",", ":")),
+                    score,
+                    status,
+                    time.time(),
+                ),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
+
+    def record_file_reference(
+        self,
+        run_id: str | None,
+        kind: str,
+        path: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Store metadata for external media; binary content stays out of SQLite."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT INTO recording_files "
+                "(run_id, kind, path, metadata_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    kind,
+                    path,
+                    json.dumps(metadata or {}, separators=(",", ":")),
+                    time.time(),
+                ),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
 
     def close(self) -> None:
         with self._lock:

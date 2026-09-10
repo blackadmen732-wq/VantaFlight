@@ -50,6 +50,21 @@ def test_v3_course_and_camera_persistence(db: FlightDatabase):
     assert counts["courses"] == 1
     assert counts["course_gates"] == 1
 
+    db.save_algorithm_configuration(
+        "cfg-1", "conservative", {"confidence_decay": 0.9}, is_default=True
+    )
+    db.record_parameter_experiment(
+        "experiment-1",
+        {"confidence_decay": 0.85},
+        configuration_id="cfg-1",
+        score=0.42,
+        status="evaluated",
+    )
+    db.record_file_reference(None, "camera_video", "/runs/run-1/camera.mp4")
+    counts = db.get_v05_counts()
+    assert counts["algorithm_configurations"] == 1
+    assert counts["parameter_experiments"] == 1
+
 
 @pytest.mark.asyncio
 async def test_async_recorder_flushes_and_rejects_after_stop(db: FlightDatabase):

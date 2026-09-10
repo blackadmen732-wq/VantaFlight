@@ -3,13 +3,15 @@
 VantaFlight is a **local-first** autonomous competition drone software platform.
 It runs entirely on your machine — no internet, no cloud, no accounts required.
 
-This repository currently contains the **foundation**: a drone-agnostic flight
-core, a simulated (mock) drone, live telemetry streaming, safety-checked flight
-commands, a simple desktop UI, and local SQLite recording of every flight.
+This repository contains the drone-agnostic Flight Core, mock/PX4 SITL
+adapters, Digital Twin, V0.5 backend-intelligence packages, and the existing
+desktop dashboard. V0.5 adds deterministic vision, racing-planner, procedural
+course, analysis, and asynchronous recording foundations without redesigning
+the desktop UI.
 
-> Scope note: this is the stable base. Real drone backends (PX4/ArduPilot),
-> computer vision, digital twin, simulation, competition logic, and packaging
-> are intentionally **not** part of this foundation and will come later.
+> Safety: V0.5 autonomous racing is simulation-only. VantaFlight emits
+> normalized trajectory/setpoint models, never raw motor PWM. PX4 remains
+> responsible for stabilization and motor control.
 
 ## What works today
 
@@ -42,6 +44,9 @@ vantaflight/
 │       ├── safety/validator.py  Command safety rules
 │       ├── data/database.py     SQLite (WAL) local persistence
 │       ├── core/flight_controller.py  Orchestrator
+│       ├── vision/              Camera, detection, pose, tracking, fusion
+│       ├── racing/              Trajectory, speed envelope, race states
+│       ├── course_lab/          Course generation, analysis, experiments
 │       └── main.py              FastAPI HTTP + WebSocket server
 ├── frontend/                    Desktop UI (React, TypeScript, Vite)
 │   ├── src/                     App, telemetry stream, controls, timeline

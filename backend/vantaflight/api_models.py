@@ -121,3 +121,20 @@ class CourseGenerationRequest(BaseModel):
     floor: float = 0.0
     ceiling: float = 12.0
     boundary_margin: float = Field(default=1.5, ge=0)
+
+
+class CourseDetailModel(BaseModel):
+    id: str
+    seed: int
+    mode: str
+    safe_volume: dict[str, Any]
+    path: list[list[float]]
+    gates: list[dict[str, Any]]
+    difficulty: dict[str, float]
+
+
+class CourseValidationModel(BaseModel):
+    course_id: str
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
