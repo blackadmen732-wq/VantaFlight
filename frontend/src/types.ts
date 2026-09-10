@@ -158,10 +158,13 @@ export interface CameraProfile {
   width: number;
   height: number;
   fps: number;
+  focal_length_x?: number;
+  focal_length_y?: number;
   camera_matrix: number[][];
   distortion_coefficients: number[];
   horizontal_fov_deg?: number;
   vertical_fov_deg?: number;
+  mount_transform: number[][];
   estimated_capture_latency_s: number;
   calibration_version: string;
 }
@@ -235,6 +238,37 @@ export interface RunMetric {
   metric_value: number;
   unit?: string;
   timestamp: number;
+}
+
+export type CourseMode =
+  | "RANDOM"
+  | "SLALOM"
+  | "VERTICAL"
+  | "TECHNICAL"
+  | "SPEED_RUN"
+  | "CHALLENGE"
+  | "ADVERSARY";
+
+export interface CourseGenerationRequest {
+  seed: number;
+  mode: CourseMode;
+  gate_count: number;
+  width: number;
+  length: number;
+  height: number;
+  floor: number;
+  ceiling: number;
+  boundary_margin: number;
+}
+
+export interface CourseDetail {
+  id: string;
+  seed: number;
+  mode: CourseMode;
+  safe_volume: Record<string, unknown>;
+  path: number[][];
+  gates: Array<Record<string, unknown>>;
+  difficulty: Record<string, number>;
 }
 
 export type WsFrame =
