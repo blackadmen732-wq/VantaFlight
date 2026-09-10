@@ -5,6 +5,7 @@ import sqlite3
 import time
 
 import pytest
+from fastapi.testclient import TestClient
 
 from vantaflight.data import AsyncRecorder, FlightDatabase
 from vantaflight.digital_twin import (
@@ -14,6 +15,7 @@ from vantaflight.digital_twin import (
     ValidationFrame,
 )
 from vantaflight.mavlink import MAVLinkConfig, PhysicalMAVLinkBlocked
+from vantaflight.main import create_app
 
 
 def test_v3_migration_preserves_existing_flights(tmp_path):
@@ -129,3 +131,21 @@ def test_truth_store_keeps_truth_outside_perception_inputs():
                 aircraft=truth.aircraft,
             )
         )
+
+
+def test_v05_api_contracts_are_typed_and_image_free():
+    app = create_app(db_path=":memory:")
+    with TestClient(app) as client:
+        assert client.get("/api/vision/status").json()["lock_state"] == "SEARCHING"
+        assert client.get("/api/vision/camera-profiles").json() == []
+        assert client.get("/api/vision/tracks").json() == []
+        assert client.get("/api/scene").status_code == 200
+        assert client.get("/api/race").json()["state"] == "IDLE"
+        assert client.get("/api/simulation/status").json()["status"] == "idle"
+        assert client.get("/api/run-metrics").json() == []
+        assert client.get("/api/experiments").json() == []
+
+        with client.websocket_connect("/ws/telemetry") as ws:
+            first = ws.receive_json()
+            assert first["type"] == "telemetry"
+            assert "image" not in first["data"]
