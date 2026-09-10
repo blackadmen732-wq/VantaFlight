@@ -79,10 +79,20 @@ class SceneStateModel(BaseModel):
     future: TargetEstimateModel | None = None
 
 
+class DesiredTrajectoryModel(BaseModel):
+    desired_position: Vector3Model
+    desired_velocity: Vector3Model
+    desired_acceleration: Vector3Model
+    desired_yaw: float
+    timestamp: float
+    trajectory_id: str
+    planner_confidence: float = Field(ge=0.0, le=1.0)
+
+
 class RaceStateModel(BaseModel):
     state: str = "IDLE"
     timestamp: float = Field(default_factory=time.time)
-    trajectory: dict[str, Any] | None = None
+    trajectory: DesiredTrajectoryModel | None = None
     aggression_scale: float = Field(default=0.0, ge=0.0, le=1.0)
 
 

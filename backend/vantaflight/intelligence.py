@@ -7,6 +7,7 @@ from typing import Any
 from .api_models import (
     CameraProfileModel,
     CourseDetailModel,
+    DesiredTrajectoryModel,
     ExperimentResultModel,
     FrameMetricsModel,
     RaceStateModel,
@@ -109,4 +110,28 @@ class IntelligenceRuntime:
             lock_state=result.lock.state.value,
             frame_metrics=metrics,
             pipeline_latency_ms=result.timeline.end_to_end_s * 1_000,
+        )
+
+    def publish_race_result(self, planner: Any, desired: Any) -> None:
+        """Publish normalized planner output without exposing actuator commands."""
+
+        def vector(values: Any) -> Vector3Model:
+            return Vector3Model(
+                x=float(values[0]), y=float(values[1]), z=float(values[2])
+            )
+
+        trajectory = DesiredTrajectoryModel(
+            desired_position=vector(desired.desired_position),
+            desired_velocity=vector(desired.desired_velocity),
+            desired_acceleration=vector(desired.desired_acceleration),
+            desired_yaw=float(desired.desired_yaw),
+            timestamp=float(desired.timestamp),
+            trajectory_id=desired.trajectory_id,
+            planner_confidence=float(desired.planner_confidence),
+        )
+        self.race = RaceStateModel(
+            state=planner.state.value,
+            timestamp=trajectory.timestamp,
+            trajectory=trajectory,
+            aggression_scale=float(planner.aggression_scale),
         )

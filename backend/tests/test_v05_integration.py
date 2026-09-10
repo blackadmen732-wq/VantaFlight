@@ -234,3 +234,25 @@ def test_vision_result_maps_to_image_free_runtime_contracts():
     assert runtime.vision_status.frame_metrics.dropped_frames == 3
     assert runtime.scene.current is not None
     assert runtime.scene.current.predicted_position.x == pytest.approx(1.1)
+
+
+def test_race_result_maps_to_typed_normalized_trajectory_contract():
+    runtime = IntelligenceRuntime()
+    planner = SimpleNamespace(
+        state=SimpleNamespace(value="ALIGN"),
+        aggression_scale=0.65,
+    )
+    desired = SimpleNamespace(
+        desired_position=np.array([1.0, 2.0, 3.0]),
+        desired_velocity=np.array([4.0, 0.0, 0.0]),
+        desired_acceleration=np.array([0.5, 0.0, 0.0]),
+        desired_yaw=0.2,
+        timestamp=8.0,
+        trajectory_id="trajectory-1",
+        planner_confidence=0.75,
+    )
+    runtime.publish_race_result(planner, desired)
+    payload = runtime.race.model_dump()
+    assert payload["trajectory"]["desired_position"]["x"] == 1.0
+    assert payload["trajectory"]["planner_confidence"] == 0.75
+    assert not {"pwm", "motor", "actuator"} & set(payload["trajectory"])
