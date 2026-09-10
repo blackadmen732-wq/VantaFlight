@@ -20,6 +20,8 @@ from vantaflight.course_lab import (
     ParameterExperiment,
     RunSample,
     SafeVolume,
+    ValidationSample,
+    analyze_validation,
 )
 
 
@@ -135,6 +137,46 @@ def test_analyzer_calculates_nonnegative_run_gate_and_segment_metrics():
 def test_analyzer_rejects_negative_speed_assumptions():
     with pytest.raises(ValueError, match="nonnegative"):
         RunSample(0, (0, 0, 1), -1)
+
+
+def test_validation_analyzer_aggregates_truth_perception_and_recovery_metrics():
+    metrics = analyze_validation(
+        [
+            ValidationSample(
+                0.0,
+                clearance=2.0,
+                vision_position_error=0.2,
+                perception_latency_s=0.02,
+                dropped_frames=1,
+            ),
+            ValidationSample(
+                0.1,
+                clearance=1.5,
+                vision_position_error=0.4,
+                prediction_error=0.3,
+                target_locked=False,
+                dropped_frames=3,
+                recovery_event=True,
+            ),
+            ValidationSample(
+                0.35,
+                clearance=1.8,
+                vision_orientation_error=0.05,
+                prediction_error=0.1,
+                trajectory_following_error=0.15,
+                controller_lag_s=0.04,
+                target_locked=True,
+                dropped_frames=3,
+            ),
+        ]
+    )
+    assert metrics.minimum_clearance == 1.5
+    assert metrics.mean_vision_position_error == pytest.approx(0.3)
+    assert metrics.mean_prediction_error == pytest.approx(0.2)
+    assert metrics.track_losses == 1
+    assert metrics.mean_reacquisition_s == pytest.approx(0.25)
+    assert metrics.dropped_frames == 3
+    assert metrics.recovery_events == 1
 
 
 def test_bounded_grid_and_random_experiments_record_without_mutating_defaults():
