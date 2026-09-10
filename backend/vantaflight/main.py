@@ -38,7 +38,10 @@ from .intelligence import IntelligenceRuntime
 from .models import AdapterType
 from .runtime import (
     DeploymentMode,
+    HardwareMode,
+    HardwareModeManager,
     HardwareProfiler,
+    PreflightChecker,
     RuntimeSupervisor,
     VantaPerformanceManager,
 )
@@ -127,6 +130,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
     training_engine = TrainingEngine()
     replay_loader = ReplayLoader(db)
     replay_player = ReplayPlayer()
+    hw_mode_manager = HardwareModeManager()
+    preflight_checker = PreflightChecker()
     app.state.db = db
     app.state.supervisor = supervisor
     app.state.perf_manager = perf_manager
@@ -428,6 +433,86 @@ def create_app(db_path: str | None = None) -> FastAPI:
             },
             "planner_state": "IDLE",
         }
+
+    # -- V0.9 hardware mode / preflight ----------------------------------------
+    @app.get("/api/hardware-mode")
+    async def hardware_mode() -> dict:
+        return hw_mode_manager.to_dict()
+
+    class HardwareModeTransitionRequest(BaseModel):
+        target: str
+        reason: str = "operator"
+
+    @app.post("/api/hardware-mode/transition")
+    async def hardware_mode_transition(req: HardwareModeTransitionRequest) -> dict:
+        try:
+            target = HardwareMode(req.target)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid mode '{req.target}'; valid: {[m.value for m in HardwareMode]}",
+            )
+        try:
+            hw_mode_manager.transition(target, req.reason)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return hw_mode_manager.to_dict()
+
+    @app.get("/api/preflight")
+    async def preflight() -> dict:
+        telemetry_snap = controller.sample()
+        report = preflight_checker.check(
+            connected=telemetry_snap.connected,
+            armed=telemetry_snap.armed,
+            battery_pct=telemetry_snap.battery_percentage,
+            adapter_name=(
+                connection_manager.active.name if connection_manager.active else None
+            ),
+            is_simulated=hw_mode_manager.is_simulation,
+            camera_available=intelligence.vision_status.running,
+            gps_fix=False,
+        )
+        return report.to_dict()
+
+    @app.get("/api/environment")
+    async def environment_check() -> dict:
+        import platform
+        import shutil
+        import sys
+
+        checks: dict[str, dict] = {}
+
+        checks["python"] = {
+            "version": sys.version,
+            "ok": sys.version_info >= (3, 11),
+        }
+
+        for pkg_name, import_name in [
+            ("numpy", "numpy"),
+            ("opencv", "cv2"),
+            ("scipy", "scipy"),
+            ("fastapi", "fastapi"),
+            ("uvicorn", "uvicorn"),
+        ]:
+            try:
+                mod = __import__(import_name)
+                ver = getattr(mod, "__version__", "unknown")
+                checks[pkg_name] = {"version": ver, "ok": True}
+            except ImportError:
+                checks[pkg_name] = {"version": None, "ok": False}
+
+        checks["platform"] = {
+            "system": platform.system(),
+            "machine": platform.machine(),
+            "ok": True,
+        }
+
+        for tool in ["ffmpeg", "gazebo"]:
+            found = shutil.which(tool) is not None
+            checks[tool] = {"available": found, "ok": True}
+
+        all_ok = all(c["ok"] for c in checks.values())
+        return {"ok": all_ok, "checks": checks}
 
     # -- V0.9 training engine -------------------------------------------------
     @app.get("/api/training/campaigns", response_model=list[TrainingCampaignModel])
