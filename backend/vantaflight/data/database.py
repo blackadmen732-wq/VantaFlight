@@ -1,9 +1,12 @@
 """Local-first persistence with schema migration."""
 from __future__ import annotations
 
+import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from ..models import CommandResult, FlightEvent, Telemetry
 
@@ -71,7 +74,116 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 """
 
-CURRENT_SCHEMA_VERSION = 2
+SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS camera_profiles (
+    camera_id TEXT PRIMARY KEY,
+    profile_json TEXT NOT NULL,
+    calibration_version TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS courses (
+    id TEXT PRIMARY KEY,
+    seed INTEGER NOT NULL,
+    mode TEXT NOT NULL,
+    safe_volume_json TEXT NOT NULL,
+    difficulty_json TEXT NOT NULL,
+    course_json TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS course_gates (
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    gate_order INTEGER NOT NULL,
+    gate_id TEXT NOT NULL,
+    gate_json TEXT NOT NULL,
+    PRIMARY KEY (course_id, gate_order)
+);
+
+CREATE TABLE IF NOT EXISTS simulation_runs (
+    id TEXT PRIMARY KEY,
+    course_id TEXT REFERENCES courses(id),
+    started_at REAL NOT NULL,
+    ended_at REAL,
+    status TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS vision_measurements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT REFERENCES simulation_runs(id),
+    frame_id TEXT NOT NULL,
+    target_id TEXT,
+    captured_at REAL NOT NULL,
+    recorded_at REAL NOT NULL,
+    measurement_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS target_tracks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT REFERENCES simulation_runs(id),
+    target_id TEXT NOT NULL,
+    timestamp REAL NOT NULL,
+    track_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trajectory_points (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT REFERENCES simulation_runs(id),
+    trajectory_id TEXT NOT NULL,
+    timestamp REAL NOT NULL,
+    point_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT REFERENCES simulation_runs(id),
+    scope TEXT NOT NULL,
+    scope_id TEXT,
+    metric_name TEXT NOT NULL,
+    metric_value REAL NOT NULL,
+    unit TEXT,
+    timestamp REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS algorithm_configurations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    values_json TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS parameter_experiments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT NOT NULL,
+    configuration_id TEXT,
+    candidate_json TEXT NOT NULL,
+    score REAL,
+    status TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recording_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT REFERENCES simulation_runs(id),
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vision_run_time
+    ON vision_measurements(run_id, captured_at);
+CREATE INDEX IF NOT EXISTS idx_tracks_run_target
+    ON target_tracks(run_id, target_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_trajectory_run_time
+    ON trajectory_points(run_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_metrics_run_scope
+    ON run_metrics(run_id, scope, scope_id);
+"""
+
+CURRENT_SCHEMA_VERSION = 3
 
 
 class FlightDatabase:
@@ -79,6 +191,7 @@ class FlightDatabase:
 
     def __init__(self, path: str | Path = "vantaflight.db") -> None:
         self.path = str(path)
+        self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         if self.path != ":memory:":
@@ -93,6 +206,9 @@ class FlightDatabase:
         version = self._get_schema_version()
         if version < 2:
             self._migrate_v2()
+            version = 2
+        if version < 3:
+            self._migrate_v3()
 
     def _get_schema_version(self) -> int:
         try:
@@ -127,6 +243,16 @@ class FlightDatabase:
             (CURRENT_SCHEMA_VERSION,),
         )
         self._conn.commit()
+
+    def _migrate_v3(self) -> None:
+        """Add V0.5 intelligence tables without modifying existing user rows."""
+        with self._lock:
+            self._conn.executescript(SCHEMA_V3)
+            self._conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
+                (CURRENT_SCHEMA_VERSION,),
+            )
+            self._conn.commit()
 
     # -- flights ------------------------------------------------------------
     def start_flight(
@@ -275,5 +401,175 @@ class FlightDatabase:
         row = self._conn.execute("PRAGMA journal_mode;").fetchone()
         return row[0]
 
+    # -- V0.5 intelligence persistence ------------------------------------
+    @property
+    def schema_version(self) -> int:
+        return self._get_schema_version()
+
+    def upsert_camera_profile(
+        self, camera_id: str, profile: dict[str, Any], calibration_version: str
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO camera_profiles "
+                "(camera_id, profile_json, calibration_version, updated_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(camera_id) DO UPDATE SET "
+                "profile_json=excluded.profile_json, "
+                "calibration_version=excluded.calibration_version, "
+                "updated_at=excluded.updated_at",
+                (
+                    camera_id,
+                    json.dumps(profile, separators=(",", ":")),
+                    calibration_version,
+                    time.time(),
+                ),
+            )
+            self._conn.commit()
+
+    def save_course(self, course: dict[str, Any]) -> None:
+        """Persist course metadata and gates atomically."""
+        gates = list(course.get("gates", []))
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO courses "
+                "(id, seed, mode, safe_volume_json, difficulty_json, course_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    course["id"],
+                    int(course["seed"]),
+                    str(course["mode"]),
+                    json.dumps(course.get("safe_volume", {}), separators=(",", ":")),
+                    json.dumps(course.get("difficulty", {}), separators=(",", ":")),
+                    json.dumps(course, separators=(",", ":")),
+                    time.time(),
+                ),
+            )
+            self._conn.execute(
+                "DELETE FROM course_gates WHERE course_id = ?", (course["id"],)
+            )
+            self._conn.executemany(
+                "INSERT INTO course_gates (course_id, gate_order, gate_id, gate_json) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        course["id"],
+                        int(gate.get("course_order", index)),
+                        str(gate.get("id", f"gate-{index}")),
+                        json.dumps(gate, separators=(",", ":")),
+                    )
+                    for index, gate in enumerate(gates)
+                ],
+            )
+            self._conn.commit()
+
+    def start_simulation_run(
+        self,
+        run_id: str,
+        course_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO simulation_runs "
+                "(id, course_id, started_at, status, metadata_json) VALUES (?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    course_id,
+                    time.time(),
+                    "running",
+                    json.dumps(metadata or {}, separators=(",", ":")),
+                ),
+            )
+            self._conn.commit()
+
+    def finish_simulation_run(self, run_id: str, status: str = "completed") -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE simulation_runs SET ended_at = ?, status = ? WHERE id = ?",
+                (time.time(), status, run_id),
+            )
+            self._conn.commit()
+
+    def record_v05_batch(self, records: list[dict[str, Any]]) -> None:
+        """Write a heterogeneous recorder batch in one transaction."""
+        with self._lock:
+            for record in records:
+                kind = record["kind"]
+                payload = record["payload"]
+                if kind == "vision_measurement":
+                    self._conn.execute(
+                        "INSERT INTO vision_measurements "
+                        "(run_id, frame_id, target_id, captured_at, recorded_at, measurement_json) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            payload.get("run_id"),
+                            payload["frame_id"],
+                            payload.get("target_id"),
+                            float(payload["captured_at"]),
+                            time.time(),
+                            json.dumps(payload, separators=(",", ":")),
+                        ),
+                    )
+                elif kind == "target_track":
+                    self._conn.execute(
+                        "INSERT INTO target_tracks "
+                        "(run_id, target_id, timestamp, track_json) VALUES (?, ?, ?, ?)",
+                        (
+                            payload.get("run_id"),
+                            payload["target_id"],
+                            float(payload["timestamp"]),
+                            json.dumps(payload, separators=(",", ":")),
+                        ),
+                    )
+                elif kind == "trajectory_point":
+                    self._conn.execute(
+                        "INSERT INTO trajectory_points "
+                        "(run_id, trajectory_id, timestamp, point_json) VALUES (?, ?, ?, ?)",
+                        (
+                            payload.get("run_id"),
+                            payload["trajectory_id"],
+                            float(payload["timestamp"]),
+                            json.dumps(payload, separators=(",", ":")),
+                        ),
+                    )
+                elif kind == "run_metric":
+                    self._conn.execute(
+                        "INSERT INTO run_metrics "
+                        "(run_id, scope, scope_id, metric_name, metric_value, unit, timestamp) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            payload.get("run_id"),
+                            payload.get("scope", "run"),
+                            payload.get("scope_id"),
+                            payload["metric_name"],
+                            float(payload["metric_value"]),
+                            payload.get("unit"),
+                            float(payload.get("timestamp", time.time())),
+                        ),
+                    )
+                else:
+                    raise ValueError(f"unsupported recorder record kind: {kind}")
+            self._conn.commit()
+
+    def get_v05_counts(self) -> dict[str, int]:
+        names = (
+            "courses",
+            "course_gates",
+            "simulation_runs",
+            "vision_measurements",
+            "target_tracks",
+            "trajectory_points",
+            "run_metrics",
+            "camera_profiles",
+            "algorithm_configurations",
+            "parameter_experiments",
+        )
+        with self._lock:
+            return {
+                name: int(self._conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0])
+                for name in names
+            }
+
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
