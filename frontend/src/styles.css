@@ -688,6 +688,135 @@ body {
   margin-bottom: 10px;
 }
 
+/* ── Page Content (shared across V0.9 pages) ────────────── */
+
+.page-content {
+  padding: 0;
+}
+
+.page-content h2 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 20px;
+}
+
+.page-content h3 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+
+.page-content h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+  margin: 16px 0 10px;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.error-msg {
+  color: var(--red);
+  font-size: 13px;
+  padding: 10px 14px;
+  background: rgba(255, 92, 92, 0.1);
+  border: 1px solid rgba(255, 92, 92, 0.3);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot.green {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+
+.dot.red {
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red);
+}
+
+/* ── Data Table ─────────────────────────────────────────── */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.data-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── Tab Bar ────────────────────────────────────────────── */
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+}
+
+.tab {
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tab:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.tab.active {
+  background: rgba(79, 140, 255, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ── Responsive ──────────────────────────────────────────── */
 
 @media (max-width: 700px) {

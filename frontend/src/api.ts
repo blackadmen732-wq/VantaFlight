@@ -1,5 +1,6 @@
 import type {
   AdapterType,
+  AutonomyState,
   Capabilities,
   CameraProfile,
   CommandResult,
@@ -7,9 +8,12 @@ import type {
   CourseGenerationRequest,
   Diagnostics,
   DiscoveredDrone,
+  HardwareInfo,
   HealthResponse,
   FusedTargetEstimate,
+  PerformanceState,
   RaceStateFrame,
+  RuntimeState,
   RunMetric,
   RunSummary,
   SceneState,
@@ -76,6 +80,11 @@ export const api = {
     postJson<CourseDetail>("/api/courses/generate", request),
   course: (courseId: string) =>
     get<CourseDetail>(`/api/courses/${encodeURIComponent(courseId)}`),
+
+  runtimeStatus: () => get<RuntimeState>("/api/runtime/status"),
+  performanceStatus: () => get<PerformanceState>("/api/runtime/performance"),
+  hardwareInfo: () => get<HardwareInfo>("/api/runtime/hardware"),
+  autonomyStatus: () => get<AutonomyState>("/api/autonomy/status"),
 };
 
 export function openTelemetryStream(

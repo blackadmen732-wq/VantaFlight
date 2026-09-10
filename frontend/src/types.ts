@@ -281,6 +281,64 @@ export type WsFrame =
   | { type: "simulation_state"; data: SimulationState }
   | { type: "run_metric"; data: RunMetric };
 
+export interface RuntimeState {
+  overall: string;
+  deployment_mode: string;
+  services: Record<string, { name: string; state: string; uptime_s: number; error: string | null }>;
+  node: Record<string, unknown>;
+}
+
+export interface PerformanceState {
+  level: string;
+  frame_age_p95_ms: number;
+  pipeline_p95_ms: number;
+  cpu_pressure: number;
+  memory_pressure: number;
+  frame_drops: number;
+  queue_depth: number;
+  transition_count: number;
+}
+
+export interface AutonomyState {
+  state: string;
+  metrics: {
+    loop_iterations: number;
+    vision_results: number;
+    plans_generated: number;
+    setpoints_sent: number;
+    gate_passes: number;
+    recovery_events: number;
+    failures: number;
+    avg_loop_ms: number;
+    state: string;
+  };
+  gate_progression: {
+    gates_passed: number;
+    total_gates: number;
+    current_gate_index: number;
+    is_complete: boolean;
+    race_time_s: number;
+    history: Array<{ gate_id: string; gate_order: number; race_time_s: number }>;
+  };
+  execution: {
+    mode: string;
+    has_permit: boolean;
+    metrics: Record<string, number | string>;
+  };
+  planner_state: RaceState;
+}
+
+export interface HardwareInfo {
+  cpu_arch: string;
+  cpu_count: number;
+  ram_total_mb: number;
+  os_name: string;
+  python_version: string;
+  opencv_version: string;
+  numpy_version: string;
+  has_shared_memory: boolean;
+}
+
 export const DISCONNECTED: Telemetry = {
   timestamp: 0,
   connected: false,

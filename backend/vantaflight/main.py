@@ -32,6 +32,12 @@ from .course_lab import CourseGenerator, CourseValidator, SafeVolume
 from .data import AsyncRecorder, FlightDatabase
 from .intelligence import IntelligenceRuntime
 from .models import AdapterType
+from .runtime import (
+    DeploymentMode,
+    HardwareProfiler,
+    RuntimeSupervisor,
+    VantaPerformanceManager,
+)
 
 
 class TakeoffRequest(BaseModel):
@@ -104,7 +110,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     controller = FlightController(db, connection_manager=connection_manager)
     hub = ConnectionHub()
     intelligence = IntelligenceRuntime()
+    supervisor = RuntimeSupervisor()
+    perf_manager = VantaPerformanceManager()
+    hw_profiler = HardwareProfiler()
     app.state.db = db
+    app.state.supervisor = supervisor
+    app.state.perf_manager = perf_manager
     app.state.controller = controller
     app.state.hub = hub
     app.state.recorder = recorder
@@ -367,6 +378,41 @@ def create_app(db_path: str | None = None) -> FastAPI:
             valid=report.valid,
             errors=list(report.errors),
         )
+
+    # -- V0.9 runtime/performance/autonomy -----------------------------------
+    @app.get("/api/runtime/status")
+    async def runtime_status() -> dict:
+        return supervisor.to_dict()
+
+    @app.get("/api/runtime/performance")
+    async def runtime_performance() -> dict:
+        return perf_manager.state.to_dict()
+
+    @app.get("/api/runtime/hardware")
+    async def runtime_hardware() -> dict:
+        return hw_profiler.profile().to_dict()
+
+    @app.get("/api/autonomy/status")
+    async def autonomy_status() -> dict:
+        return {
+            "state": "IDLE",
+            "metrics": {
+                "loop_iterations": 0, "vision_results": 0,
+                "plans_generated": 0, "setpoints_sent": 0,
+                "gate_passes": 0, "recovery_events": 0,
+                "failures": 0, "avg_loop_ms": 0.0,
+                "state": "IDLE",
+            },
+            "gate_progression": {
+                "gates_passed": 0, "total_gates": 0,
+                "current_gate_index": 0, "is_complete": False,
+                "race_time_s": 0.0, "history": [],
+            },
+            "execution": {
+                "mode": "IDLE", "has_permit": False, "metrics": {},
+            },
+            "planner_state": "IDLE",
+        }
 
     # -- WebSocket ----------------------------------------------------------
     @app.websocket("/ws/telemetry")

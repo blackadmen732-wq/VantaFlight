@@ -14,6 +14,9 @@ import DigitalTwin from "./components/DigitalTwin";
 import DiagnosticsPanel from "./components/DiagnosticsPanel";
 import RunSummaryCard from "./components/RunSummaryCard";
 import SimulationLab from "./pages/SimulationLab";
+import VisionPage from "./pages/VisionPage";
+import PerformancePage from "./pages/PerformancePage";
+import TrainingPage from "./pages/TrainingPage";
 
 const AIRBORNE_EPS = 0.15;
 
@@ -196,17 +199,32 @@ export default function App() {
           <span className="logo">&#9650;</span> VantaFlight
           <nav className="nav-links">
             <NavLink to="/" end>Control</NavLink>
+            <NavLink to="/vision">Vision</NavLink>
             <NavLink to="/sim">Sim Lab</NavLink>
+            <NavLink to="/performance">Performance</NavLink>
+            <NavLink to="/training">Training</NavLink>
           </nav>
         </header>
 
         <Routes>
           <Route path="/" element={<FlightDashboard />} />
+          <Route path="/vision" element={<VisionWrapper />} />
           <Route path="/sim" element={<SimLabWrapper />} />
+          <Route path="/performance" element={<PerformancePage />} />
+          <Route path="/training" element={<TrainingPage />} />
         </Routes>
       </div>
     </BrowserRouter>
   );
+}
+
+function VisionWrapper() {
+  const [wsOnline, setWsOnline] = useState(false);
+  useEffect(() => {
+    const unsub = openTelemetryStream(() => {}, setWsOnline);
+    return unsub;
+  }, []);
+  return <VisionPage wsConnected={wsOnline} />;
 }
 
 function SimLabWrapper() {
