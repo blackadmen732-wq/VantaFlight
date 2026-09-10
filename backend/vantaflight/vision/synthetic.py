@@ -1,8 +1,64 @@
 """Deterministic synthetic planar-target imagery for tests and simulation."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
+
+
+@dataclass(frozen=True)
+class SyntheticTargetSpec:
+    corners: np.ndarray
+    bgr: tuple[int, int, int] = (0, 255, 0)
+    brightness: float = 1.0
+    occlusion_fraction: float = 0.0
+
+
+def render_synthetic_scene(
+    size: tuple[int, int] = (640, 480),
+    targets: tuple[SyntheticTargetSpec, ...] = (),
+    *,
+    background_bgr: tuple[int, int, int] = (16, 16, 16),
+    background: np.ndarray | None = None,
+    noise_std: float = 0.0,
+    motion_blur_px: int = 0,
+    seed: int = 0,
+) -> np.ndarray:
+    """Render deterministic multi-target scenes with common camera artifacts."""
+    width, height = size
+    if width <= 0 or height <= 0:
+        raise ValueError("size must be positive")
+    if background is None:
+        image = np.full((height, width, 3), background_bgr, dtype=np.uint8)
+    else:
+        image = np.asarray(background, dtype=np.uint8).copy()
+        if image.shape != (height, width, 3):
+            raise ValueError("background must match the requested scene size")
+    for target in targets:
+        corners = np.asarray(target.corners, dtype=np.float32)
+        if corners.shape != (4, 2):
+            raise ValueError("target corners must be 4x2")
+        if target.brightness < 0 or not 0 <= target.occlusion_fraction < 1:
+            raise ValueError("brightness must be nonnegative and occlusion in [0, 1)")
+        polygon = np.rint(corners).astype(np.int32)
+        color = tuple(
+            int(value)
+            for value in np.clip(np.asarray(target.bgr) * target.brightness, 0, 255)
+        )
+        cv2.fillConvexPoly(image, polygon, color)
+        if target.occlusion_fraction:
+            x, y, w, h = cv2.boundingRect(polygon)
+            occlusion_width = max(1, int(round(w * target.occlusion_fraction)))
+            image[y : y + h, x + w - occlusion_width : x + w] = background_bgr
+    if motion_blur_px > 1:
+        kernel = np.zeros((1, motion_blur_px), dtype=np.float32)
+        kernel[0] = 1.0 / motion_blur_px
+        image = cv2.filter2D(image, -1, kernel)
+    if noise_std > 0:
+        noise = np.random.default_rng(seed).normal(0, noise_std, image.shape)
+        image = np.clip(image.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+    return image
 
 
 def render_target_image(
@@ -14,6 +70,9 @@ def render_target_image(
     noise_std: float = 0.0,
     seed: int = 0,
     border_px: int = 0,
+    brightness: float = 1.0,
+    occlusion_fraction: float = 0.0,
+    motion_blur_px: int = 0,
 ) -> np.ndarray:
     """Render a filled quadrilateral with repeatable Gaussian sensor noise."""
     width, height = size
@@ -28,14 +87,24 @@ def render_target_image(
     corners = np.asarray(corners, dtype=np.float32)
     if corners.shape != (4, 2):
         raise ValueError("corners must be 4x2")
-    image = np.full((height, width, 3), background_bgr, dtype=np.uint8)
+    image = render_synthetic_scene(
+        size,
+        (
+            SyntheticTargetSpec(
+                corners,
+                bgr=bgr,
+                brightness=brightness,
+                occlusion_fraction=occlusion_fraction,
+            ),
+        ),
+        background_bgr=background_bgr,
+        noise_std=noise_std,
+        motion_blur_px=motion_blur_px,
+        seed=seed,
+    )
     polygon = np.rint(corners).astype(np.int32)
-    cv2.fillConvexPoly(image, polygon, bgr)
     if border_px > 0:
         cv2.polylines(image, [polygon], True, (255, 255, 255), border_px)
-    if noise_std > 0:
-        noise = np.random.default_rng(seed).normal(0, noise_std, image.shape)
-        image = np.clip(image.astype(np.float32) + noise, 0, 255).astype(np.uint8)
     return image
 
 
