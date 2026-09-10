@@ -5,12 +5,14 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import math
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
 
 from .api_models import (
     CameraProfileModel,
@@ -35,7 +37,12 @@ from .models import AdapterType
 
 
 class TakeoffRequest(BaseModel):
-    target_altitude_m: float = 5.0
+    target_altitude_m: float = Field(
+        default=5.0,
+        gt=0.15,
+        le=120.0,
+        allow_inf_nan=False,
+    )
 
 
 class ConnectRequest(BaseModel):
@@ -45,25 +52,51 @@ class ConnectRequest(BaseModel):
 class ConnectionHub:
     """Tracks connected WebSocket clients and broadcasts JSON frames."""
 
-    def __init__(self) -> None:
+    def __init__(self, send_timeout_s: float = 0.05) -> None:
+        if not math.isfinite(send_timeout_s) or send_timeout_s <= 0:
+            raise ValueError("send_timeout_s must be finite and positive")
         self._clients: set[WebSocket] = set()
+        self._send_timeout_s = send_timeout_s
 
-    async def register(self, ws: WebSocket) -> None:
+    async def register(
+        self,
+        ws: WebSocket,
+        initial_message: dict | None = None,
+    ) -> bool:
         await ws.accept()
+        if initial_message is not None and not await self._send(ws, initial_message):
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(
+                    ws.close(code=1013),
+                    timeout=self._send_timeout_s,
+                )
+            return False
         self._clients.add(ws)
+        return True
 
     def unregister(self, ws: WebSocket) -> None:
         self._clients.discard(ws)
 
+    async def _send(self, ws: WebSocket, message: dict) -> bool:
+        try:
+            await asyncio.wait_for(
+                ws.send_json(message),
+                timeout=self._send_timeout_s,
+            )
+        except Exception:
+            return False
+        return True
+
     async def broadcast(self, message: dict) -> None:
-        dead: list[WebSocket] = []
-        for ws in list(self._clients):
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.unregister(ws)
+        clients = list(self._clients)
+        if not clients:
+            return
+        delivered = await asyncio.gather(
+            *(self._send(ws, message) for ws in clients)
+        )
+        for ws, succeeded in zip(clients, delivered):
+            if not succeeded:
+                self.unregister(ws)
 
     @property
     def count(self) -> int:
@@ -97,6 +130,21 @@ def create_app(db_path: str | None = None) -> FastAPI:
         allow_methods=["GET", "POST"],
         allow_headers=["Content-Type"],
     )
+    trusted_origins = frozenset(CORS_ORIGINS)
+
+    @app.middleware("http")
+    async def reject_cross_origin_commands(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and origin is not None
+            and origin not in trusted_origins
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "cross-origin command rejected"},
+            )
+        return await call_next(request)
 
     db = FlightDatabase(db_path or DB_PATH)
     recorder = AsyncRecorder(db)
@@ -371,16 +419,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # -- WebSocket ----------------------------------------------------------
     @app.websocket("/ws/telemetry")
     async def telemetry_ws(ws: WebSocket) -> None:
-        await hub.register(ws)
+        origin = ws.headers.get("origin")
+        if origin is not None and origin not in trusted_origins:
+            await ws.close(code=1008)
+            return
+        registered = await hub.register(
+            ws,
+            {
+                "type": "telemetry",
+                "data": controller.get_telemetry().model_dump(mode="json"),
+            },
+        )
+        if not registered:
+            return
         try:
-            await ws.send_json(
-                {"type": "telemetry", "data": controller.get_telemetry().model_dump(mode="json")}
-            )
             while True:
                 await ws.receive_text()
         except WebSocketDisconnect:
-            hub.unregister(ws)
+            pass
         except Exception:
+            pass
+        finally:
             hub.unregister(ws)
 
     return app

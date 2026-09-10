@@ -47,11 +47,14 @@ class FlightController:
         self._twin = TwinSession()
         self._last_telemetry_time: float = 0.0
         self._metrics = _Metrics()
-        self._connect_lock = asyncio.Lock()
+        # Safety validation and adapter dispatch are one atomic operation.
+        # MAVSDK calls yield to the event loop, so a connect/disconnect or
+        # second command must not race between those two steps.
+        self._operation_lock = asyncio.Lock()
 
     # -- lifecycle ----------------------------------------------------------
     async def connect(self, target=None) -> CommandResult:
-        async with self._connect_lock:
+        async with self._operation_lock:
             return await self._connect_inner(target)
 
     async def _connect_inner(self, target=None) -> CommandResult:
@@ -85,6 +88,10 @@ class FlightController:
         return CommandResult(command="connect", accepted=True, message=f"connected to {caps.name}")
 
     async def disconnect(self) -> CommandResult:
+        async with self._operation_lock:
+            return await self._disconnect_inner()
+
+    async def _disconnect_inner(self) -> CommandResult:
         if self._connections.adapter is None:
             return CommandResult(command="disconnect", accepted=False, message="not connected")
 
@@ -105,6 +112,10 @@ class FlightController:
             return await self.connect()
         if name == "disconnect":
             return await self.disconnect()
+        async with self._operation_lock:
+            return await self._command_inner(name, **kwargs)
+
+    async def _command_inner(self, name: str, **kwargs) -> CommandResult:
         if name not in _ADAPTER_COMMANDS:
             result = CommandResult(command=name, accepted=False, message=f"unknown command '{name}'")
             self._record_command(result)
@@ -115,14 +126,24 @@ class FlightController:
 
         t_start = time.monotonic()
         telemetry = self.get_telemetry()
-        violation = self._safety.check(name, telemetry)
+        adapter = self._connections.adapter
+        max_altitude_m = (
+            adapter.get_capabilities().max_altitude_m
+            if adapter is not None
+            else 120.0
+        )
+        violation = self._safety.check(
+            name,
+            telemetry,
+            max_altitude_m=max_altitude_m,
+            **kwargs,
+        )
         if violation is not None:
             result = CommandResult(command=name, accepted=False, message=violation.reason)
             self._record_command(result)
             self._log_event("rejected", f"{name} rejected: {violation.reason}")
             return result
 
-        adapter = self._connections.adapter
         assert adapter is not None
         try:
             method = getattr(adapter, name)
@@ -132,6 +153,16 @@ class FlightController:
             self._record_command(result)
             self._log_event("error", f"{name} failed: {exc}")
             return result
+
+        # A transport task can report a link failure while an adapter command
+        # is awaiting its response. Never acknowledge that command as accepted
+        # after the session has transitioned to interrupted.
+        if not self.get_telemetry().connected or self._session_state in _TERMINAL:
+            return CommandResult(
+                command=name,
+                accepted=False,
+                message="connection lost while command was in progress",
+            )
 
         cmd_time = time.monotonic() - t_start
         self._metrics.record_command_rtt(cmd_time)

@@ -52,7 +52,7 @@ CameraManager ─┬─ latest FramePacket → VantaFrame → VantaDetect → Va
                │                                      ↓
                │                         DesiredTrajectoryState
                │                                      ↓
-               │                          simulation-only PX4 boundary
+               │                    future PX4 SITL execution boundary
                │
                └─ lower-priority preview boundary (transport deferred)
 
@@ -63,7 +63,8 @@ AsyncRecorder ── bounded queue and batched SQLite writes
 
 Vision modules have no MAVSDK dependency. Racing modules have no OpenCV
 dependency. `DesiredTrajectoryState` contains position, velocity,
-acceleration, and yaw setpoints—not motor or PWM commands.
+acceleration, and yaw setpoints—not motor or PWM commands. V0.5 does not send
+these setpoints to PX4; offboard trajectory execution remains deferred.
 
 ## Key Design Decisions
 

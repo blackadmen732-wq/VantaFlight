@@ -54,9 +54,10 @@ vantaflight/
 └── scripts/install.sh           One-shot local setup
 ```
 
-The rest of VantaFlight only ever depends on the `DroneAdapter` abstraction, so
-adding PX4, ArduPilot, USB/serial, radio, UDP, or TCP later means implementing
-that one contract — nothing else changes.
+The rest of VantaFlight depends on the `DroneAdapter` abstraction. PX4 SITL is
+the only MAVLink adapter currently implemented. Supporting ArduPilot, physical
+aircraft, USB/serial, radio, TCP, or non-SITL UDP would also require explicit
+discovery, configuration, and safety work; those paths are not implemented.
 
 ## Running VantaFlight locally (Linux / Chromebook Linux)
 

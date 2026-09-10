@@ -46,7 +46,12 @@ class Telemetry(BaseModel):
 
     @property
     def airborne(self) -> bool:
-        return self.connected and self.altitude > 0.15
+        # Mode is part of the normalized contract because altitude can lag the
+        # accepted takeoff command. Treat every active flight mode as airborne
+        # so a disarm cannot slip through during takeoff spin-up or landing.
+        return self.connected and (
+            self.altitude > 0.15 or self.flight_mode is not FlightMode.IDLE
+        )
 
 
 class Capabilities(BaseModel):
