@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol, runtime_checkable
@@ -54,8 +55,8 @@ class ONNXDetector:
             candidates = await asyncio.to_thread(self._infer, frame.image, frame.timestamp)
         else:
             candidates = self._infer(frame.image, frame.timestamp)
-            if asyncio.iscoroutine(candidates):
-                candidates = await candidates
+        if inspect.isawaitable(candidates):
+            candidates = await candidates
         return AsyncDetectionResult(
             tuple(candidates), frame.timestamp, self._clock(), frame.sequence, self._backend
         )

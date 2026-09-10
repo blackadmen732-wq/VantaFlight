@@ -10,12 +10,15 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from vantaflight.adapters import MockDroneAdapter
 from vantaflight.adapters.px4_sitl import PX4SITLAdapter
+from vantaflight.connection import ConnectionManager
 from vantaflight.core import FlightController
 from vantaflight.core.flight_controller import SessionState, _Metrics
 from vantaflight.data import FlightDatabase
 from vantaflight.digital_twin import DigitalTwinState
 from vantaflight.main import create_app
+from vantaflight.mavlink import MAVLinkConfig, PhysicalMAVLinkBlocked
 from vantaflight.mavlink.mavsdk_client import MAVSDKError, PX4Telemetry
 from vantaflight.models import FlightMode, Telemetry
 
@@ -89,6 +92,67 @@ class TestConnectRaceCondition:
         assert len(accepted) == 1
         assert len(rejected) == 1
         assert "already connected" in rejected[0].message
+
+
+class PausingTakeoffAdapter(MockDroneAdapter):
+    def __init__(self):
+        super().__init__()
+        self.takeoff_started = asyncio.Event()
+        self.release_takeoff = asyncio.Event()
+
+    async def takeoff(self, target_altitude_m: float = 5.0) -> None:
+        self.takeoff_started.set()
+        await self.release_takeoff.wait()
+
+
+class TestCommandLifecycleRaceConditions:
+    @staticmethod
+    def controller_with(adapter: PausingTakeoffAdapter) -> FlightController:
+        manager = ConnectionManager(adapter_factory=lambda _drone: adapter)
+        return FlightController(
+            FlightDatabase(":memory:"), connection_manager=manager
+        )
+
+    async def test_disconnect_waits_for_in_flight_command(self):
+        adapter = PausingTakeoffAdapter()
+        controller = self.controller_with(adapter)
+        await controller.connect()
+        await controller.command("arm")
+
+        command_task = asyncio.create_task(controller.command("takeoff"))
+        await adapter.takeoff_started.wait()
+        disconnect_task = asyncio.create_task(controller.disconnect())
+        await asyncio.sleep(0)
+
+        assert not disconnect_task.done()
+        adapter.release_takeoff.set()
+        assert (await command_task).accepted is True
+        assert (await disconnect_task).accepted is True
+
+    async def test_command_is_not_accepted_after_connection_loss(self):
+        adapter = PausingTakeoffAdapter()
+        controller = self.controller_with(adapter)
+        await controller.connect()
+        await controller.command("arm")
+
+        command_task = asyncio.create_task(controller.command("takeoff"))
+        await adapter.takeoff_started.wait()
+        adapter.force_connection_loss()
+        controller.get_telemetry()
+        adapter.release_takeoff.set()
+
+        result = await command_task
+        assert result.accepted is False
+        assert "connection lost" in result.message
+        assert controller.session_state == SessionState.INTERRUPTED
+
+
+class TestSimulationOnlyMAVLinkConfig:
+    def test_simulation_only_flag_cannot_enable_physical_link(self):
+        with pytest.raises(PhysicalMAVLinkBlocked):
+            MAVLinkConfig(
+                system_address="serial:///dev/ttyUSB0", simulation_only=False
+            )
 
 
 # ---------------------------------------------------------------------------

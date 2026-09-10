@@ -136,3 +136,15 @@ async def test_optional_async_detector_reports_freshness() -> None:
     result = await detector.detect(packet(7, 1.0))
     assert result.sequence == 7 and result.is_fresh(1.1, 0.2)
     assert not result.is_fresh(1.3, 0.2)
+
+
+@pytest.mark.asyncio
+async def test_optional_detector_awaits_async_callable_in_thread_mode() -> None:
+    async def infer(_image, _timestamp):
+        await asyncio.sleep(0)
+        return []
+
+    result = await ONNXDetector(infer).detect(packet(8, 2.0))
+
+    assert result.sequence == 8
+    assert result.candidates == ()

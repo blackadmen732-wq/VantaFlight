@@ -110,6 +110,41 @@ async def test_async_recorder_start_stop_is_idempotent(db: FlightDatabase):
     await recorder.stop()
 
 
+def test_v05_batch_rolls_back_all_records_on_failure(db: FlightDatabase):
+    with pytest.raises(ValueError, match="unsupported recorder record kind"):
+        db.record_v05_batch(
+            [
+                {
+                    "kind": "run_metric",
+                    "payload": {"metric_name": "must_rollback", "metric_value": 1},
+                },
+                {"kind": "unsupported", "payload": {}},
+            ]
+        )
+
+    assert db.get_v05_counts()["run_metrics"] == 0
+
+
+@pytest.mark.asyncio
+async def test_async_recorder_drops_failed_batch_and_keeps_running(
+    db: FlightDatabase,
+):
+    recorder = AsyncRecorder(db, capacity=4, batch_size=2, flush_interval_s=0.01)
+    await recorder.start()
+    assert recorder.record(
+        "run_metric", {"metric_name": "must_rollback", "metric_value": 1}
+    )
+    assert recorder.record("unsupported", {})
+    assert recorder.record(
+        "run_metric", {"metric_name": "survives", "metric_value": 2}
+    )
+    await recorder.stop()
+
+    assert recorder.metrics.written_records == 1
+    assert recorder.metrics.dropped_records == 2
+    assert db.get_v05_counts()["run_metrics"] == 1
+
+
 def test_simulation_guard_rejects_physical_mavlink_links():
     MAVLinkConfig(system_address="udpin://127.0.0.1:14540")
     with pytest.raises(PhysicalMAVLinkBlocked):
