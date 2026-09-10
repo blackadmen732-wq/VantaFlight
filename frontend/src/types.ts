@@ -123,10 +123,129 @@ export interface HealthResponse {
   session_state: SessionState;
 }
 
+export type VisionLockState =
+  | "SEARCHING"
+  | "CANDIDATE"
+  | "DETECTED"
+  | "CONFIRMED"
+  | "TRACKED"
+  | "POSE_LOCKED"
+  | "PREDICTIVE_LOCK"
+  | "RACE_LOCK"
+  | "DEGRADED"
+  | "LOST";
+
+export type RaceState =
+  | "IDLE"
+  | "SEARCH"
+  | "ACQUIRE"
+  | "LOCK"
+  | "ALIGN"
+  | "ACCELERATE"
+  | "PASS"
+  | "NEXT"
+  | "RECOVER"
+  | "COMPLETE";
+
+export interface Vector3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface CameraProfile {
+  camera_id: string;
+  width: number;
+  height: number;
+  fps: number;
+  camera_matrix: number[][];
+  distortion_coefficients: number[];
+  horizontal_fov_deg?: number;
+  vertical_fov_deg?: number;
+  estimated_capture_latency_s: number;
+  calibration_version: string;
+}
+
+export interface FrameBufferMetrics {
+  frames_captured: number;
+  frames_processed: number;
+  dropped_frames: number;
+  queue_depth: number;
+  oldest_frame_age_s: number;
+  current_frame_age_s: number;
+}
+
+export interface VisionStatus {
+  running: boolean;
+  source: string | null;
+  lock_state: VisionLockState;
+  frame_metrics: FrameBufferMetrics;
+  pipeline_latency_ms: number;
+}
+
+export interface FusedTargetEstimate {
+  target_id: string;
+  profile_id: string;
+  observed_position?: Vector3;
+  predicted_position?: Vector3;
+  velocity: Vector3;
+  confidence: number;
+  uncertainty: number;
+  measurement_age_s: number;
+  track_state: VisionLockState;
+  evidence: Record<string, string | number | boolean>;
+}
+
+export interface SceneState {
+  timestamp: number;
+  current?: FusedTargetEstimate;
+  next?: FusedTargetEstimate;
+  future?: FusedTargetEstimate;
+}
+
+export interface DesiredTrajectoryState {
+  desired_position: Vector3;
+  desired_velocity: Vector3;
+  desired_acceleration: Vector3;
+  desired_yaw: number;
+  timestamp: number;
+  trajectory_id: string;
+  planner_confidence: number;
+}
+
+export interface RaceStateFrame {
+  state: RaceState;
+  timestamp: number;
+  trajectory?: DesiredTrajectoryState;
+  aggression_scale: number;
+}
+
+export interface SimulationState {
+  run_id: string | null;
+  course_id: string | null;
+  status: "idle" | "running" | "completed" | "failed";
+  timestamp: number;
+}
+
+export interface RunMetric {
+  run_id: string;
+  scope: "run" | "gate" | "segment";
+  scope_id?: string;
+  metric_name: string;
+  metric_value: number;
+  unit?: string;
+  timestamp: number;
+}
+
 export type WsFrame =
   | { type: "telemetry"; data: Telemetry }
   | { type: "event"; data: FlightEvent }
-  | { type: "twin"; data: TwinState };
+  | { type: "twin"; data: TwinState }
+  | { type: "vision_state"; data: VisionStatus }
+  | { type: "scene_state"; data: SceneState }
+  | { type: "race_state"; data: RaceStateFrame }
+  | { type: "simulation_state"; data: SimulationState }
+  | { type: "run_metric"; data: RunMetric };
 
 export const DISCONNECTED: Telemetry = {
   timestamp: 0,
