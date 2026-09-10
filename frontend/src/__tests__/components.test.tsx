@@ -110,6 +110,8 @@ describe("AdapterSelector", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
       json: () => Promise.resolve({
         drones: [
           { drone_id: "mock-0", name: "Mock Drone", adapter_type: "mock", transport: "SIMULATED", address: "in-process", capabilities: ["arm"] },
