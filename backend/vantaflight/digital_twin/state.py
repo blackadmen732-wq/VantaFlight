@@ -97,7 +97,7 @@ class DigitalTwinState:
             "battery_percentage": round(self.battery_percentage, 2),
             "flight_duration": round(self.flight_duration, 1),
             "trajectory": [
-                {"ts": p.timestamp, "x": p.x, "y": p.y, "z": p.z, "heading": p.heading}
+                {"timestamp": p.timestamp, "x": p.x, "y": p.y, "z": p.z, "heading": p.heading}
                 for p in self.trajectory.points[-100:]
             ],
         }

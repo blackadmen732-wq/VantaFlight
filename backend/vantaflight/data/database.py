@@ -249,8 +249,8 @@ class FlightDatabase:
 
         max_alt = max((s["altitude"] for s in samples), default=0.0)
         max_speed = max((abs(s["velocity"]) for s in samples), default=0.0)
-        bat_start = samples[0]["battery_percentage"] if samples else 100.0
-        bat_end = samples[-1]["battery_percentage"] if samples else 100.0
+        bat_start = samples[0]["battery_percentage"] if samples else None
+        bat_end = samples[-1]["battery_percentage"] if samples else None
         interruptions = sum(1 for e in events if e["event_type"] == "connection_lost")
 
         duration = 0.0
@@ -262,8 +262,8 @@ class FlightDatabase:
             "duration": round(duration, 1),
             "max_altitude": round(max_alt, 2),
             "max_speed": round(max_speed, 2),
-            "battery_start": round(bat_start, 1),
-            "battery_end": round(bat_end, 1),
+            "battery_start": round(bat_start, 1) if bat_start is not None else None,
+            "battery_end": round(bat_end, 1) if bat_end is not None else None,
             "command_count": len(commands),
             "connection_interruptions": interruptions,
             "final_status": flight["status"],

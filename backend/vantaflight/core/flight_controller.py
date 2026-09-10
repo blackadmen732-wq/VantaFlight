@@ -1,6 +1,7 @@
 """The flight core orchestrator."""
 from __future__ import annotations
 
+import asyncio
 import enum
 import time
 
@@ -46,13 +47,22 @@ class FlightController:
         self._twin = TwinSession()
         self._last_telemetry_time: float = 0.0
         self._metrics = _Metrics()
+        self._connect_lock = asyncio.Lock()
 
     # -- lifecycle ----------------------------------------------------------
-    async def connect(self) -> CommandResult:
+    async def connect(self, target=None) -> CommandResult:
+        async with self._connect_lock:
+            return await self._connect_inner(target)
+
+    async def _connect_inner(self, target=None) -> CommandResult:
         if self._connections.adapter is not None and self._connections.adapter.connected:
             return CommandResult(command="connect", accepted=False, message="already connected")
 
-        adapter = await self._connections.connect()
+        try:
+            adapter = await self._connections.connect(target)
+        except Exception as exc:
+            return CommandResult(command="connect", accepted=False, message=str(exc))
+
         caps = adapter.get_capabilities()
         active = self._connections.active
         drone_id = active.drone_id if active else adapter.adapter_id
@@ -267,6 +277,6 @@ class _Metrics:
     def to_dict(self) -> dict:
         return {
             "telemetry_hz": round(self.avg_telemetry_hz, 1),
-            "command_rtt_ms": round(self.avg_command_rtt_ms, 2),
-            "db_write_ms": round(self.avg_db_write_ms, 2),
+            "avg_command_rtt_ms": round(self.avg_command_rtt_ms, 2),
+            "avg_db_write_ms": round(self.avg_db_write_ms, 2),
         }

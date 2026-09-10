@@ -4,6 +4,9 @@
   "version": "0.3.0",
   "type": "module",
   "description": "VantaFlight desktop UI - local-first autonomous drone platform",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

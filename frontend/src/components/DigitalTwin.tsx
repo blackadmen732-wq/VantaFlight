@@ -85,6 +85,14 @@ export default function DigitalTwin({ twin }: Props) {
     return () => {
       window.removeEventListener("resize", onResize);
       cancelAnimationFrame(s.animId);
+      scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
+          obj.geometry?.dispose();
+          const mat = obj.material;
+          if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+          else mat?.dispose();
+        }
+      });
       renderer.dispose();
       el.removeChild(renderer.domElement);
     };
