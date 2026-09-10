@@ -67,7 +67,7 @@ class SceneTarget(Protocol):
 class RacingScene(Protocol):
     """Scene-like input exposing an ordered gate horizon."""
 
-    CURRENT: SceneTarget
+    CURRENT: SceneTarget | None
     NEXT: SceneTarget | None
     FUTURE: SceneTarget | None
 
@@ -143,3 +143,36 @@ class DesiredTrajectoryState:
             raise ValueError("trajectory_id cannot be empty")
         if not 0.0 <= self.planner_confidence <= 1.0:
             raise ValueError("planner_confidence must be between zero and one")
+
+    @property
+    def desired_position(self) -> Vector3:
+        return self.position
+
+    @property
+    def desired_velocity(self) -> Vector3:
+        return self.velocity
+
+    @property
+    def desired_acceleration(self) -> Vector3:
+        return self.acceleration
+
+    @property
+    def desired_yaw(self) -> float:
+        return self.yaw
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to the frontend DesiredTrajectoryState contract."""
+
+        def xyz(vector: ArrayLike) -> dict[str, float]:
+            value = vector3(vector, "vector")
+            return {"x": float(value[0]), "y": float(value[1]), "z": float(value[2])}
+
+        return {
+            "desired_position": xyz(self.position),
+            "desired_velocity": xyz(self.velocity),
+            "desired_acceleration": xyz(self.acceleration),
+            "desired_yaw": self.yaw,
+            "timestamp": self.timestamp,
+            "trajectory_id": self.trajectory_id,
+            "planner_confidence": self.planner_confidence,
+        }
