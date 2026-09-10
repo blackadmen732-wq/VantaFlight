@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Callable
 
 import cv2
 import numpy as np
+
+
+class PixelColorSpace(str, Enum):
+    """Color interpretation for three-channel OpenCV images."""
+
+    BGR = "BGR"
+    HSV = "HSV"
 
 
 @dataclass(frozen=True)
@@ -27,6 +35,9 @@ class PreprocessConfig:
 class PreprocessResult:
     image: np.ndarray
     timings_ms: dict[str, float] = field(default_factory=dict)
+    color_space: PixelColorSpace = PixelColorSpace.BGR
+    camera_matrix: np.ndarray | None = None
+    distortion: np.ndarray | None = None
 
     @property
     def total_ms(self) -> float:
@@ -48,9 +59,22 @@ class OpenCVPreprocessor:
         image: np.ndarray,
         camera_matrix: np.ndarray | None = None,
         distortion: np.ndarray | None = None,
+        *,
+        color_space: PixelColorSpace = PixelColorSpace.BGR,
     ) -> PreprocessResult:
         output = np.asarray(image)
         timings: dict[str, float] = {}
+        effective_matrix = (
+            None if camera_matrix is None else np.asarray(camera_matrix, np.float64).copy()
+        )
+        effective_distortion = (
+            None if distortion is None else np.asarray(distortion, np.float64).copy()
+        )
+        if (effective_matrix is None) != (effective_distortion is None):
+            raise ValueError("camera matrix and distortion must be supplied together")
+        if color_space != PixelColorSpace.BGR:
+            raise ValueError("preprocessor input must use BGR color space")
+        input_height, input_width = output.shape[:2]
 
         def stage(name: str, operation: Callable[[np.ndarray], np.ndarray]) -> None:
             nonlocal output
@@ -59,11 +83,21 @@ class OpenCVPreprocessor:
             timings[name] = max(0.0, (self._clock() - start) * 1000)
 
         if self.config.undistort:
-            if camera_matrix is None or distortion is None:
+            if effective_matrix is None or effective_distortion is None:
                 raise ValueError("camera calibration required for undistortion")
-            stage("undistort", lambda frame: cv2.undistort(frame, camera_matrix, distortion))
+            stage(
+                "undistort",
+                lambda frame: cv2.undistort(frame, effective_matrix, effective_distortion),
+            )
+            effective_distortion = np.zeros_like(effective_distortion)
         if self.config.resize is not None:
             stage("resize", lambda frame: cv2.resize(frame, self.config.resize))
+            if effective_matrix is not None:
+                resized_width, resized_height = self.config.resize
+                scale = np.diag(
+                    [resized_width / input_width, resized_height / input_height, 1.0]
+                )
+                effective_matrix = scale @ effective_matrix
         if self.config.clahe_clip_limit > 0:
             def clahe(frame: np.ndarray) -> np.ndarray:
                 lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
@@ -80,4 +114,11 @@ class OpenCVPreprocessor:
             )
         if self.config.convert_hsv:
             stage("hsv", lambda frame: cv2.cvtColor(frame, cv2.COLOR_BGR2HSV))
-        return PreprocessResult(output, timings)
+            color_space = PixelColorSpace.HSV
+        return PreprocessResult(
+            output,
+            timings,
+            color_space,
+            effective_matrix,
+            effective_distortion,
+        )

@@ -34,8 +34,11 @@ def camera_to_body(point_camera_m: np.ndarray, camera: CameraProfile) -> np.ndar
 
 
 def body_to_world(point_body_m: np.ndarray, aircraft: AircraftState) -> np.ndarray:
-    """Convert aircraft-relative FRD into local NED."""
-    return transform_point(aircraft.body_to_world, point_body_m)
+    """Convert aircraft-relative FRD into NED, including aircraft position."""
+    return (
+        transform_point(aircraft.body_to_world, point_body_m)
+        + aircraft.position_ned_m
+    )
 
 
 def camera_to_world(

@@ -97,6 +97,8 @@ class FrameBuffer:
 
     def latest(self, max_age_s: float | None = None, now: float | None = None) -> FramePacket | None:
         """Return newest frame, discarding older queued and over-age frames."""
+        if max_age_s is not None and max_age_s < 0:
+            raise ValueError("max_age_s must be non-negative")
         with self._lock:
             if not self._frames:
                 return None
@@ -104,8 +106,6 @@ class FrameBuffer:
             self._dropped_stale += len(self._frames)
             self._frames.clear()
             if max_age_s is not None:
-                if max_age_s < 0:
-                    raise ValueError("max_age_s must be non-negative")
                 age = (self._clock() if now is None else now) - newest.capture_timestamp
                 if age > max_age_s:
                     self._dropped_stale += 1
@@ -218,6 +218,7 @@ class SyntheticCameraSource(BaseCameraSource):
         self._running = False
 
     async def start(self) -> None:
+        self._index = 0
         self._running = True
 
     async def read(self) -> FramePacket | None:
@@ -368,6 +369,8 @@ class CameraManager:
         self._processing_task: asyncio.Task[None] | None = None
         self._lifecycle_lock = asyncio.Lock()
         self._running = False
+        self._source_started = False
+        self._failure: Exception | None = None
 
     @property
     def running(self) -> bool:
@@ -377,11 +380,37 @@ class CameraManager:
     def capture_task(self) -> asyncio.Task[None] | None:
         return self._capture_task
 
+    @property
+    def failure(self) -> Exception | None:
+        return self._failure
+
     async def start(self) -> None:
         async with self._lifecycle_lock:
-            if self._running:
+            if (
+                self._running
+                and self._capture_task is not None
+                and not self._capture_task.done()
+            ):
                 return
-            await self.source.start()
+            if self._capture_task is not None:
+                await asyncio.gather(self._capture_task, return_exceptions=True)
+                self._capture_task = None
+            if self._processing_task is not None:
+                self._processing_task.cancel()
+                await asyncio.gather(self._processing_task, return_exceptions=True)
+                self._processing_task = None
+            if self._source_started:
+                await self.source.stop()
+                self._source_started = False
+            try:
+                await self.source.start()
+            except Exception as exc:
+                self._failure = exc
+                self._running = False
+                await self.source.stop()
+                raise
+            self._source_started = True
+            self._failure = None
             self._running = True
             self._capture_task = asyncio.create_task(
                 self._capture_loop(), name=f"vision-capture:{self.source.source_id}"
@@ -398,6 +427,14 @@ class CameraManager:
                 self.preview_buffer.put_nowait(frame)
         except asyncio.CancelledError:
             raise
+        except Exception as exc:
+            self._failure = exc
+            self._running = False
+            if (
+                self._processing_task is not None
+                and self._processing_task is not asyncio.current_task()
+            ):
+                self._processing_task.cancel()
 
     async def process_latest(
         self,
@@ -433,7 +470,12 @@ class CameraManager:
 
     async def stop(self) -> None:
         async with self._lifecycle_lock:
-            if not self._running and self._capture_task is None:
+            if (
+                not self._running
+                and self._capture_task is None
+                and self._processing_task is None
+                and not self._source_started
+            ):
                 return
             self._running = False
             tasks = [task for task in (self._processing_task, self._capture_task) if task is not None]
@@ -443,7 +485,9 @@ class CameraManager:
                 await asyncio.gather(*tasks, return_exceptions=True)
             self._processing_task = None
             self._capture_task = None
-            await self.source.stop()
+            if self._source_started:
+                await self.source.stop()
+                self._source_started = False
 
     async def restart(self) -> None:
         await self.stop()

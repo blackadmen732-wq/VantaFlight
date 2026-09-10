@@ -27,7 +27,7 @@ from .latency import LatencyTimeline
 from .lock import LockSnapshot, TargetLock
 from .optical_flow import PyramidalLK
 from .pose import PoseEstimator
-from .preprocess import OpenCVPreprocessor, PreprocessResult
+from .preprocess import OpenCVPreprocessor, PixelColorSpace, PreprocessResult
 from .roi import ROISearchPolicy
 from .scene import SceneObject, VantaScene
 from .tracking import KalmanTargetTracker, MultiTargetTracker, TrackSnapshot, TrackStatus
@@ -109,11 +109,14 @@ class VisionPipeline:
         return self._started
 
     def _flow_candidates(
-        self, image: np.ndarray, frame: FramePacket
+        self,
+        image: np.ndarray,
+        frame: FramePacket,
+        color_space: PixelColorSpace,
     ) -> list[TargetCandidate]:
         if self._previous_gray is None or not self._previous_candidates:
             return []
-        gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = self._to_gray(image, color_space)
         flowed: list[TargetCandidate] = []
         for candidate in self._previous_candidates:
             result = self.flow.track(self._previous_gray, gray, candidate.corners)
@@ -141,6 +144,22 @@ class VisionPipeline:
             )
         return flowed
 
+    @staticmethod
+    def _to_gray(image: np.ndarray, color_space: PixelColorSpace) -> np.ndarray:
+        if image.ndim == 2:
+            return image
+        conversion = (
+            cv2.COLOR_BGR2GRAY
+            if color_space == PixelColorSpace.BGR
+            else cv2.COLOR_HSV2BGR
+        )
+        converted = cv2.cvtColor(image, conversion)
+        return (
+            converted
+            if converted.ndim == 2
+            else cv2.cvtColor(converted, cv2.COLOR_BGR2GRAY)
+        )
+
     async def process(
         self, frame: FramePacket, aircraft_state: AircraftState | None = None
     ) -> VisionPipelineResult:
@@ -166,17 +185,32 @@ class VisionPipeline:
         detector_ran = due or force
         candidates = (
             self.detector.detect(
-                processed.image, frame.capture_timestamp, roi, frame.frame_id
+                processed.image,
+                frame.capture_timestamp,
+                roi,
+                frame.frame_id,
+                color_space=processed.color_space,
             )
-            if detector_ran else self._flow_candidates(processed.image, frame)
+            if detector_ran
+            else self._flow_candidates(processed.image, frame, processed.color_space)
         )
         # Flow failure/geometry rejection immediately falls back to a full detector pass.
         if not detector_ran and not candidates:
             candidates = self.detector.detect(
-                processed.image, frame.capture_timestamp, None, frame.frame_id
+                processed.image,
+                frame.capture_timestamp,
+                None,
+                frame.frame_id,
+                color_space=processed.color_space,
             )
             detector_ran = True
-        neural_result = await self.async_detector.detect(frame) if self.async_detector else None
+        try:
+            neural_result = (
+                await self.async_detector.detect(frame) if self.async_detector else None
+            )
+        except Exception:
+            # Optional neural inference must not terminate classical processing.
+            neural_result = None
         timeline.mark("detect", max(max(timeline.marks.values()), self._clock()))
         self._frame_count += 1
 
@@ -191,8 +225,12 @@ class VisionPipeline:
                 candidates,
                 self.tracker.state[:2],
                 innovation_covariance,
-                profile_name=self._profile_name,
-                previous_area_px=self._last_area,
+                profile_name=(
+                    None if self.tracker.status == TrackStatus.LOST else self._profile_name
+                ),
+                previous_area_px=(
+                    None if self.tracker.status == TrackStatus.LOST else self._last_area
+                ),
             )
             selected = association.candidate
         else:
@@ -203,15 +241,28 @@ class VisionPipeline:
             self.roi_policy.found(selected.centroid)
             self._last_area = selected.area_px
             self._profile_name = selected.profile.name
-            pose = self.pose_estimator.estimate(selected).validated
+            pose = self.pose_estimator.estimate(
+                selected,
+                camera_matrix=processed.camera_matrix,
+                distortion=processed.distortion,
+            ).validated
         else:
             track = self.tracker.update(None, frame.capture_timestamp)
             self.roi_policy.missed()
             pose = None
+            if track.status == TrackStatus.LOST:
+                self._profile_name = None
+                self._last_area = None
         all_poses = {
             candidate.candidate_id: estimate.validated
             for candidate in candidates
-            if (estimate := self.pose_estimator.estimate(candidate)).validated is not None
+            if (
+                estimate := self.pose_estimator.estimate(
+                    candidate,
+                    camera_matrix=processed.camera_matrix,
+                    distortion=processed.distortion,
+                )
+            ).validated is not None
         }
         timeline.mark("pose", max(max(timeline.marks.values()), self._clock()))
         tracks = self.tracker_map.update(candidates, frame.capture_timestamp)
@@ -241,7 +292,8 @@ class VisionPipeline:
             camera_position = pose.translation_vector
             body_position = camera_to_body(camera_position, self.camera)
             world_position = camera_to_world(camera_position, self.camera, aircraft)
-            uncertainty = np.eye(3) * max(1e-6, pose.reprojection_error_px + 1e-3)
+            if pose.translation_covariance_m2 is not None:
+                uncertainty = pose.translation_covariance_m2.copy()
             observed_pose = ObservedPose3D(
                 frame.capture_timestamp, camera_position, body_position, world_position,
                 pose.rotation_vector, uncertainty,
@@ -277,10 +329,7 @@ class VisionPipeline:
         self.scene.purge(now)
         timeline.mark("planning", max(max(timeline.marks.values()), self._clock()))
         timeline.mark("command", max(max(timeline.marks.values()), self._clock()))
-        gray = (
-            processed.image if processed.image.ndim == 2
-            else cv2.cvtColor(processed.image, cv2.COLOR_BGR2GRAY)
-        )
+        gray = self._to_gray(processed.image, processed.color_space)
         self._previous_gray = gray.copy()
         self._previous_candidates = tuple(candidates)
         return VisionPipelineResult(

@@ -46,6 +46,8 @@ class ROISearchPolicy:
         if self.state == ROIState.EXPANDING:
             size = int(size * self.config.expansion_factor ** self._misses)
         cx, cy = self._center
-        x0, y0 = max(0, int(cx - size / 2)), max(0, int(cy - size / 2))
-        x1, y1 = min(width, int(cx + size / 2)), min(height, int(cy + size / 2))
+        x0 = min(width, max(0, int(cx - size / 2)))
+        y0 = min(height, max(0, int(cy - size / 2)))
+        x1 = min(width, max(0, int(cx + size / 2)))
+        y1 = min(height, max(0, int(cy + size / 2)))
         return x0, y0, x1 - x0, y1 - y0
