@@ -120,6 +120,9 @@ class ParameterExperiment:
         if set(grid) != set(self.bounds):
             raise ValueError("grid parameters must exactly match experiment bounds")
         names = tuple(sorted(grid))
+        for name in names:
+            for value in grid[name]:
+                self.bounds[name].constrain(value)
         start = len(self.records)
         for values in itertools.product(*(grid[name] for name in names)):
             self._evaluate(dict(zip(names, values)), CourseMode(mode), generation_seed)
