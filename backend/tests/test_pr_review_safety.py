@@ -9,7 +9,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from vantaflight.adapters import MockDroneAdapter
 from vantaflight.connection import ConnectionManager
-from vantaflight.core import FlightController, SessionState
+from vantaflight.core import FlightController
+from vantaflight.core.flight_controller import SessionState
 from vantaflight.data import FlightDatabase
 from vantaflight.main import ConnectionHub, create_app
 
