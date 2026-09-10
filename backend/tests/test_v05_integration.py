@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,8 @@ from vantaflight.digital_twin import (
 )
 from vantaflight.mavlink import MAVLinkConfig, PhysicalMAVLinkBlocked
 from vantaflight.main import create_app
+from vantaflight.intelligence import IntelligenceRuntime
+from vantaflight.vision import LockState
 
 
 def test_v3_migration_preserves_existing_flights(tmp_path):
@@ -196,3 +200,37 @@ def test_course_api_generates_validates_persists_and_reloads(tmp_path):
         loaded = client.get(f"/api/courses/{course_id}")
         assert loaded.status_code == 200
         assert loaded.json()["seed"] == 17
+
+
+def test_vision_result_maps_to_image_free_runtime_contracts():
+    runtime = IntelligenceRuntime()
+    result = SimpleNamespace(
+        frame=SimpleNamespace(camera_source="synthetic"),
+        selected=SimpleNamespace(candidate_id="candidate-1", profile_id="gate"),
+        lock=SimpleNamespace(state=LockState.PREDICTIVE_LOCK),
+        timeline=SimpleNamespace(end_to_end_s=0.012),
+        fusion=SimpleNamespace(
+            observed_pose=SimpleNamespace(position_world_m=np.array([1.0, 2.0, 3.0])),
+            predicted_pose=SimpleNamespace(position_world_m=np.array([1.1, 2.0, 3.0])),
+            velocity=np.array([1.0, 0.0, 0.0]),
+            confidence=0.82,
+            uncertainty=np.eye(3) * 0.2,
+            age_s=0.03,
+            timestamp=5.0,
+            contributions={"classical": 1.2, "pose": 0.8},
+        ),
+    )
+    metrics = SimpleNamespace(
+        frames_captured=10,
+        frames_processed=7,
+        frames_dropped=3,
+        depth=0,
+        oldest_frame_age_s=None,
+        current_frame_age_s=None,
+    )
+    runtime.publish_vision_result(result, frame_metrics=metrics)
+
+    assert runtime.vision_status.lock_state == "PREDICTIVE_LOCK"
+    assert runtime.vision_status.frame_metrics.dropped_frames == 3
+    assert runtime.scene.current is not None
+    assert runtime.scene.current.predicted_position.x == pytest.approx(1.1)
