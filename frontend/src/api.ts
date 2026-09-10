@@ -1,6 +1,7 @@
 import type {
   AdapterType,
   AutonomyState,
+  CampaignAnalysis,
   Capabilities,
   CameraProfile,
   CommandResult,
@@ -8,6 +9,7 @@ import type {
   CourseGenerationRequest,
   Diagnostics,
   DiscoveredDrone,
+  FaultProfileInfo,
   HardwareInfo,
   HealthResponse,
   FusedTargetEstimate,
@@ -18,6 +20,9 @@ import type {
   RunSummary,
   SceneState,
   SimulationState,
+  TrainingCampaign,
+  TrainingRunResult,
+  TrainingSummary,
   TwinState,
   VisionStatus,
   WsFrame,
@@ -85,6 +90,22 @@ export const api = {
   performanceStatus: () => get<PerformanceState>("/api/runtime/performance"),
   hardwareInfo: () => get<HardwareInfo>("/api/runtime/hardware"),
   autonomyStatus: () => get<AutonomyState>("/api/autonomy/status"),
+
+  listCampaigns: () => get<TrainingCampaign[]>("/api/training/campaigns"),
+  createCampaign: (config: Record<string, unknown>) =>
+    postJson<TrainingCampaign>("/api/training/campaigns", config),
+  startCampaign: (id: string) => post(`/api/training/campaigns/${encodeURIComponent(id)}/start`),
+  pauseCampaign: (id: string) => post(`/api/training/campaigns/${encodeURIComponent(id)}/pause`),
+  cancelCampaign: (id: string) => post(`/api/training/campaigns/${encodeURIComponent(id)}/cancel`),
+  campaignSummary: (id: string) =>
+    get<TrainingSummary>(`/api/training/campaigns/${encodeURIComponent(id)}/summary`),
+  campaignAnalysis: (id: string) =>
+    get<CampaignAnalysis>(`/api/training/campaigns/${encodeURIComponent(id)}/analysis`),
+  runNextTraining: (id: string) =>
+    postJson<TrainingRunResult>(`/api/training/campaigns/${encodeURIComponent(id)}/run-next`, {}),
+  autoCurriculum: (config: Record<string, unknown>) =>
+    postJson<Record<string, unknown>>("/api/training/auto-curriculum", config),
+  faultProfiles: () => get<Record<string, FaultProfileInfo>>("/api/training/fault-profiles"),
 };
 
 export function openTelemetryStream(

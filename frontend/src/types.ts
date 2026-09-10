@@ -339,6 +339,79 @@ export interface HardwareInfo {
   has_shared_memory: boolean;
 }
 
+export interface TrainingCampaign {
+  campaign_id: string;
+  name: string;
+  state: string;
+  total_runs: number;
+  completed_runs: number;
+}
+
+export interface TrainingSummary {
+  campaign_id: string;
+  state: string;
+  total_runs: number;
+  completed_runs: number;
+  successful_runs: number;
+  failed_runs: number;
+  success_rate: number;
+  avg_gate_completion: number;
+  avg_race_time_s: number;
+  failure_breakdown: Record<string, number>;
+  elapsed_s: number;
+}
+
+export interface TrainingRunResult {
+  run_id: string;
+  campaign_id: string;
+  gates_passed: number;
+  total_gates: number;
+  race_time_s: number;
+  complete: boolean;
+  success: boolean;
+  failures: string[];
+  failure_categories: string[];
+  gate_completion_rate: number;
+  duration_s: number;
+}
+
+export interface CampaignAnalysis {
+  campaign_id: string;
+  total_runs: number;
+  successes: number;
+  failures: number;
+  overall_success_rate: number;
+  overall_gate_completion: number;
+  overall_avg_time_s: number;
+  tier_breakdown: Array<{
+    tier: string;
+    total_runs: number;
+    successes: number;
+    failures: number;
+    success_rate: number;
+    avg_gate_completion: number;
+  }>;
+  mode_breakdown: Array<{
+    mode: string;
+    total_runs: number;
+    successes: number;
+    success_rate: number;
+    avg_gate_completion: number;
+  }>;
+  top_failures: Array<{ category: string; count: number }>;
+  fault_impact: Record<string, number>;
+}
+
+export interface FaultProfileInfo {
+  name: string;
+  faults: Array<{
+    fault_type: string;
+    probability: number;
+    duration_s: number;
+    magnitude: number;
+  }>;
+}
+
 export const DISCONNECTED: Telemetry = {
   timestamp: 0,
   connected: false,

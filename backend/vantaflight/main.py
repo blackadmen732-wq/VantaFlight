@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .api_models import (
+    AutoCurriculumRequest,
     CameraProfileModel,
     CourseDetailModel,
     CourseGenerationRequest,
@@ -23,6 +24,9 @@ from .api_models import (
     SceneStateModel,
     SimulationStateModel,
     TargetEstimateModel,
+    TrainingCampaignModel,
+    TrainingCampaignRequest,
+    TrainingSummaryModel,
     VisionStatusModel,
 )
 from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_VERSION
@@ -37,6 +41,12 @@ from .runtime import (
     HardwareProfiler,
     RuntimeSupervisor,
     VantaPerformanceManager,
+)
+from .training import (
+    CampaignConfig,
+    CurriculumBuilder,
+    DifficultyTier,
+    TrainingEngine,
 )
 
 
@@ -113,6 +123,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     supervisor = RuntimeSupervisor()
     perf_manager = VantaPerformanceManager()
     hw_profiler = HardwareProfiler()
+    training_engine = TrainingEngine()
     app.state.db = db
     app.state.supervisor = supervisor
     app.state.perf_manager = perf_manager
@@ -120,6 +131,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.hub = hub
     app.state.recorder = recorder
     app.state.intelligence = intelligence
+    app.state.training_engine = training_engine
 
     async def stream_loop() -> None:
         period = 1.0 / STREAM_HZ
@@ -412,6 +424,94 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "mode": "IDLE", "has_permit": False, "metrics": {},
             },
             "planner_state": "IDLE",
+        }
+
+    # -- V0.9 training engine -------------------------------------------------
+    @app.get("/api/training/campaigns", response_model=list[TrainingCampaignModel])
+    async def list_campaigns() -> list[dict]:
+        return training_engine.list_campaigns()
+
+    @app.post("/api/training/campaigns", response_model=TrainingCampaignModel)
+    async def create_campaign(req: TrainingCampaignRequest) -> dict:
+        config = CampaignConfig(
+            name=req.name,
+            description=req.description,
+            course_modes=req.course_modes,
+            seed_range=req.seed_range,
+            gate_counts=req.gate_counts,
+            difficulty_tiers=req.difficulty_tiers,
+            fault_profiles=req.fault_profiles,
+            max_time_per_run_s=req.max_time_per_run_s,
+            max_runs=req.max_runs,
+            stop_on_failure=req.stop_on_failure,
+        )
+        cid = training_engine.create_campaign(config)
+        return training_engine.list_campaigns()[-1]
+
+    @app.post("/api/training/campaigns/{campaign_id}/start")
+    async def start_campaign(campaign_id: str) -> dict:
+        try:
+            training_engine.start_campaign(campaign_id)
+            return {"campaign_id": campaign_id, "status": "started"}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/training/campaigns/{campaign_id}/pause")
+    async def pause_campaign(campaign_id: str) -> dict:
+        try:
+            training_engine.pause_campaign(campaign_id)
+            return {"campaign_id": campaign_id, "status": "paused"}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/training/campaigns/{campaign_id}/cancel")
+    async def cancel_campaign(campaign_id: str) -> dict:
+        try:
+            training_engine.cancel_campaign(campaign_id)
+            return {"campaign_id": campaign_id, "status": "cancelled"}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/training/campaigns/{campaign_id}/summary")
+    async def campaign_summary(campaign_id: str) -> dict:
+        try:
+            return training_engine.get_summary(campaign_id).to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/training/campaigns/{campaign_id}/analysis")
+    async def campaign_analysis(campaign_id: str) -> dict:
+        try:
+            return training_engine.get_analysis(campaign_id).to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/training/campaigns/{campaign_id}/run-next")
+    async def run_next(campaign_id: str) -> dict:
+        try:
+            result = training_engine.execute_next_run(campaign_id)
+            if result is None:
+                return {"status": "complete", "campaign_id": campaign_id}
+            return result.to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/training/auto-curriculum")
+    async def auto_curriculum(req: AutoCurriculumRequest) -> dict:
+        tiers = [DifficultyTier(t) for t in req.tiers] if req.tiers else None
+        config = CurriculumBuilder().auto_curriculum(
+            tiers=tiers,
+            seeds_per_tier=req.seeds_per_tier,
+            gate_counts_per_tier=req.gate_counts_per_tier,
+        )
+        return config.to_dict()
+
+    @app.get("/api/training/fault-profiles")
+    async def fault_profiles() -> dict:
+        from .training import FAULT_PROFILES
+        return {
+            name: profile.to_dict()
+            for name, profile in FAULT_PROFILES.items()
         }
 
     # -- WebSocket ----------------------------------------------------------

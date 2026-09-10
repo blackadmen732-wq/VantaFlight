@@ -157,3 +157,44 @@ class CourseValidationModel(BaseModel):
     valid: bool
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class TrainingCampaignRequest(BaseModel):
+    name: str = "Untitled Campaign"
+    description: str = ""
+    course_modes: list[str] = Field(default_factory=lambda: ["RANDOM"])
+    seed_range: tuple[int, int] = (0, 10)
+    gate_counts: list[int] = Field(default_factory=lambda: [8, 12, 16])
+    difficulty_tiers: list[str] = Field(default_factory=lambda: ["MODERATE"])
+    fault_profiles: list[list[str]] = Field(default_factory=list)
+    max_time_per_run_s: float = 300.0
+    max_runs: int = 0
+    stop_on_failure: bool = False
+
+
+class TrainingCampaignModel(BaseModel):
+    campaign_id: str
+    name: str
+    state: str
+    total_runs: int
+    completed_runs: int
+
+
+class TrainingSummaryModel(BaseModel):
+    campaign_id: str
+    state: str
+    total_runs: int
+    completed_runs: int
+    successful_runs: int
+    failed_runs: int
+    success_rate: float
+    avg_gate_completion: float
+    avg_race_time_s: float
+    failure_breakdown: dict[str, int]
+    elapsed_s: float
+
+
+class AutoCurriculumRequest(BaseModel):
+    tiers: list[str] | None = None
+    seeds_per_tier: int = Field(default=3, ge=1, le=100)
+    gate_counts_per_tier: int = Field(default=2, ge=1, le=10)
