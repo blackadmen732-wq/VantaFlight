@@ -18,6 +18,11 @@ class LookaheadConfig:
     exit_distance: float = 1.0
 
     def __post_init__(self) -> None:
+        if not all(
+            np.isfinite(value)
+            for value in (self.next_weight, self.future_weight, self.exit_distance)
+        ):
+            raise ValueError("lookahead values must be finite")
         if not 0.0 <= self.next_weight <= 1.0:
             raise ValueError("next_weight must be between zero and one")
         if not 0.0 <= self.future_weight <= 1.0:
@@ -55,6 +60,7 @@ class CubicHermiteTrajectory:
         *,
         trajectory_id: str | None = None,
         planner_confidence: float = 1.0,
+        speed_limits: ArrayLike | None = None,
     ) -> None:
         self.times = np.asarray(times, dtype=np.float64)
         self.positions = np.asarray(positions, dtype=np.float64)
@@ -74,6 +80,14 @@ class CubicHermiteTrajectory:
                 raise ValueError("velocities must match positions")
             if not np.all(np.isfinite(self.velocities)):
                 raise ValueError("velocities must be finite")
+        self.speed_limits: np.ndarray | None = None
+        if speed_limits is not None:
+            limits = np.asarray(speed_limits, dtype=np.float64)
+            if limits.shape != self.times.shape:
+                raise ValueError("speed_limits must match times")
+            if not np.all(np.isfinite(limits)) or np.any(limits < 0.0):
+                raise ValueError("speed_limits must be finite and non-negative")
+            self.speed_limits = limits.copy()
         self.trajectory_id = trajectory_id or uuid4().hex
         self.planner_confidence = float(planner_confidence)
         if not 0.0 <= self.planner_confidence <= 1.0:
@@ -114,6 +128,14 @@ class CubicHermiteTrajectory:
             + (-6 * u**2 + 6 * u) * p1 / duration
             + (3 * u**2 - 2 * u) * v1
         )
+        if self.speed_limits is not None:
+            speed_limit = float(
+                self.speed_limits[index]
+                + u * (self.speed_limits[index + 1] - self.speed_limits[index])
+            )
+            speed = float(np.linalg.norm(velocity))
+            if speed > speed_limit and speed > 0.0:
+                velocity = velocity * (speed_limit / speed)
         acceleration = (
             (12 * u - 6) * p0 / duration**2
             + (6 * u - 4) * v0 / duration

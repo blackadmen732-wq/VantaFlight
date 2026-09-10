@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from .api_models import (
     CameraProfileModel,
@@ -37,10 +37,40 @@ class IntelligenceRuntime:
     simulation: SimulationStateModel = field(default_factory=SimulationStateModel)
     run_metrics: list[RunMetricModel] = field(default_factory=list)
     experiments: list[ExperimentResultModel] = field(default_factory=list)
+    _track_sequence: int = field(default=0, init=False, repr=False)
+    _active_track_id: str | None = field(default=None, init=False, repr=False)
+    _active_profile_id: str | None = field(default=None, init=False, repr=False)
+
+    MAX_RUN_METRICS: ClassVar[int] = 10_000
 
     def publish_metric(self, metric: RunMetricModel, limit: int = 1_000) -> None:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= self.MAX_RUN_METRICS
+        ):
+            raise ValueError(
+                f"limit must be an integer between 1 and {self.MAX_RUN_METRICS}"
+            )
         self.run_metrics.append(metric)
-        del self.run_metrics[:-limit]
+        if len(self.run_metrics) > limit:
+            del self.run_metrics[: len(self.run_metrics) - limit]
+
+    def _stable_track_id(self, profile_id: str) -> str:
+        if self._active_track_id is not None and profile_id == self._active_profile_id:
+            return self._active_track_id
+        if self._active_track_id is not None:
+            self.tracks.pop(self._active_track_id, None)
+        self._track_sequence += 1
+        self._active_track_id = f"track-{self._track_sequence:06d}"
+        self._active_profile_id = profile_id
+        return self._active_track_id
+
+    def _clear_active_track(self) -> None:
+        if self._active_track_id is not None:
+            self.tracks.pop(self._active_track_id, None)
+        self._active_track_id = None
+        self._active_profile_id = None
 
     def publish_vision_result(
         self,
@@ -69,9 +99,10 @@ class IntelligenceRuntime:
         selected = result.selected
         if selected is not None:
             uncertainty = float(max(fused.uncertainty.diagonal()))
+            profile_id = str(selected.profile_id)
             estimate = TargetEstimateModel(
-                target_id=selected.candidate_id,
-                profile_id=selected.profile_id,
+                target_id=self._stable_track_id(profile_id),
+                profile_id=profile_id,
                 observed_position=observed,
                 predicted_position=predicted,
                 velocity=vector(fused.velocity),
@@ -90,9 +121,10 @@ class IntelligenceRuntime:
             self.scene = SceneStateModel(
                 timestamp=fused.timestamp,
                 current=estimate,
-                next=self.scene.next,
-                future=self.scene.future,
             )
+        else:
+            self._clear_active_track()
+            self.scene = SceneStateModel(timestamp=fused.timestamp)
 
         metrics = FrameMetricsModel()
         if frame_metrics is not None:

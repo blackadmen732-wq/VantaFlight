@@ -1,6 +1,7 @@
 """MAVSDK connection configuration."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -19,8 +20,16 @@ class MAVLinkConfig:
     simulation_only: bool = True
 
     def __post_init__(self) -> None:
-        if self.simulation_only:
-            validate_sitl_address(self.system_address)
+        # This backend has no physical autonomous mode. Keep simulation_only as
+        # a compatibility field, but never let it bypass the transport lock.
+        validate_sitl_address(self.system_address)
+        if (
+            not math.isfinite(self.connection_timeout)
+            or self.connection_timeout <= 0.0
+            or not math.isfinite(self.health_timeout)
+            or self.health_timeout <= 0.0
+        ):
+            raise ValueError("MAVLink timeouts must be finite and positive")
 
 
 def validate_sitl_address(address: str) -> None:
