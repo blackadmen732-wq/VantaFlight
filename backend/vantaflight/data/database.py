@@ -183,7 +183,52 @@ CREATE INDEX IF NOT EXISTS idx_metrics_run_scope
     ON run_metrics(run_id, scope, scope_id);
 """
 
-CURRENT_SCHEMA_VERSION = 3
+SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS missions (
+    mission_id   TEXT PRIMARY KEY,
+    mission_type TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'PENDING',
+    phase        TEXT NOT NULL DEFAULT 'PREFLIGHT',
+    goal_json    TEXT NOT NULL,
+    created_at   REAL NOT NULL,
+    started_at   REAL,
+    ended_at     REAL,
+    elapsed_s    REAL NOT NULL DEFAULT 0.0,
+    waypoints_reached INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS mission_waypoints (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id  TEXT NOT NULL REFERENCES missions(mission_id) ON DELETE CASCADE,
+    wp_order    INTEGER NOT NULL,
+    x           REAL NOT NULL,
+    y           REAL NOT NULL,
+    z           REAL NOT NULL,
+    speed_m_s   REAL NOT NULL DEFAULT 5.0,
+    heading_deg REAL,
+    hold_s      REAL NOT NULL DEFAULT 0.0,
+    label       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS mission_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id  TEXT NOT NULL REFERENCES missions(mission_id) ON DELETE CASCADE,
+    timestamp   REAL NOT NULL,
+    event_type  TEXT NOT NULL,
+    phase       TEXT,
+    detail_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_mission_events_mid
+    ON mission_events(mission_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_mission_waypoints_mid
+    ON mission_waypoints(mission_id, wp_order);
+CREATE INDEX IF NOT EXISTS idx_missions_status
+    ON missions(status);
+"""
+
+CURRENT_SCHEMA_VERSION = 4
 
 
 class FlightDatabase:
@@ -209,6 +254,9 @@ class FlightDatabase:
             version = 2
         if version < 3:
             self._migrate_v3()
+            version = 3
+        if version < 4:
+            self._migrate_v4()
 
     def _get_schema_version(self) -> int:
         with self._lock:
@@ -249,6 +297,16 @@ class FlightDatabase:
         """Add V0.5 intelligence tables without modifying existing user rows."""
         with self._lock:
             self._conn.executescript(SCHEMA_V3)
+            self._conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
+                (CURRENT_SCHEMA_VERSION,),
+            )
+            self._conn.commit()
+
+    def _migrate_v4(self) -> None:
+        """Add mission persistence tables."""
+        with self._lock:
+            self._conn.executescript(SCHEMA_V4)
             self._conn.execute(
                 "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
                 (CURRENT_SCHEMA_VERSION,),
@@ -666,6 +724,180 @@ class FlightDatabase:
             )
             self._conn.commit()
             return int(cursor.lastrowid)
+
+    # -- V0.9 mission persistence --------------------------------------------
+    def save_mission(
+        self,
+        mission_id: str,
+        mission_type: str,
+        goal: dict[str, Any],
+        *,
+        status: str = "PENDING",
+        phase: str = "PREFLIGHT",
+        waypoints: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO missions "
+                    "(mission_id, mission_type, status, phase, goal_json, "
+                    "created_at, metadata_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(mission_id) DO UPDATE SET "
+                    "status=excluded.status, phase=excluded.phase, "
+                    "goal_json=excluded.goal_json, metadata_json=excluded.metadata_json",
+                    (
+                        mission_id,
+                        mission_type,
+                        status,
+                        phase,
+                        json.dumps(goal, separators=(",", ":")),
+                        time.time(),
+                        json.dumps(metadata or {}, separators=(",", ":")),
+                    ),
+                )
+                if waypoints:
+                    self._conn.execute(
+                        "DELETE FROM mission_waypoints WHERE mission_id = ?",
+                        (mission_id,),
+                    )
+                    self._conn.executemany(
+                        "INSERT INTO mission_waypoints "
+                        "(mission_id, wp_order, x, y, z, speed_m_s, heading_deg, "
+                        "hold_s, label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                mission_id,
+                                i,
+                                float(wp["x"]),
+                                float(wp["y"]),
+                                float(wp["z"]),
+                                float(wp.get("speed_m_s", 5.0)),
+                                wp.get("heading_deg"),
+                                float(wp.get("hold_s", 0.0)),
+                                wp.get("label", ""),
+                            )
+                            for i, wp in enumerate(waypoints)
+                        ],
+                    )
+
+    def update_mission_status(
+        self,
+        mission_id: str,
+        status: str,
+        *,
+        phase: str | None = None,
+        elapsed_s: float | None = None,
+        waypoints_reached: int | None = None,
+    ) -> None:
+        with self._lock:
+            parts = ["status = ?"]
+            params: list[Any] = [status]
+            if status == "ACTIVE":
+                parts.append("started_at = COALESCE(started_at, ?)")
+                params.append(time.time())
+            if status in ("COMPLETE", "ABORTED", "FAILED"):
+                parts.append("ended_at = ?")
+                params.append(time.time())
+            if phase is not None:
+                parts.append("phase = ?")
+                params.append(phase)
+            if elapsed_s is not None:
+                parts.append("elapsed_s = ?")
+                params.append(elapsed_s)
+            if waypoints_reached is not None:
+                parts.append("waypoints_reached = ?")
+                params.append(waypoints_reached)
+            params.append(mission_id)
+            self._conn.execute(
+                f"UPDATE missions SET {', '.join(parts)} WHERE mission_id = ?",
+                tuple(params),
+            )
+            self._conn.commit()
+
+    def record_mission_event(
+        self,
+        mission_id: str,
+        event_type: str,
+        *,
+        phase: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO mission_events "
+                "(mission_id, timestamp, event_type, phase, detail_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    mission_id,
+                    time.time(),
+                    event_type,
+                    phase,
+                    json.dumps(detail or {}, separators=(",", ":")),
+                ),
+            )
+            self._conn.commit()
+
+    def get_mission(self, mission_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM missions WHERE mission_id = ?", (mission_id,)
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["goal"] = json.loads(d.pop("goal_json"))
+        d["metadata"] = json.loads(d.pop("metadata_json"))
+        return d
+
+    def list_missions_db(
+        self, *, status: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            if status:
+                rows = self._conn.execute(
+                    "SELECT * FROM missions WHERE status = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (status, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM missions ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            d["goal"] = json.loads(d.pop("goal_json"))
+            d["metadata"] = json.loads(d.pop("metadata_json"))
+            result.append(d)
+        return result
+
+    def get_mission_events(
+        self, mission_id: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM mission_events WHERE mission_id = ? "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (mission_id, limit),
+            ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            d["detail"] = json.loads(d.pop("detail_json"))
+            result.append(d)
+        return result
+
+    def get_mission_waypoints(self, mission_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM mission_waypoints WHERE mission_id = ? "
+                "ORDER BY wp_order ASC",
+                (mission_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def close(self) -> None:
         with self._lock:

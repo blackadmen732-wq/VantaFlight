@@ -29,7 +29,7 @@ def test_v3_migration_preserves_existing_flights(tmp_path):
     db.close()
 
     reopened = FlightDatabase(path)
-    assert reopened.schema_version == 3
+    assert reopened.schema_version == 4
     assert reopened.get_flight(flight_id)["drone_name"] == "Mock"
     assert "camera_profiles" in reopened.get_v05_counts()
     reopened.close()

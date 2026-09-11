@@ -513,6 +513,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
             max_duration_s=req.max_duration_s,
         )
         spec = mission_registry.create_mission(mtype, goal)
+        db.save_mission(
+            spec.mission_id,
+            mtype.value,
+            goal.to_dict(),
+            waypoints=[w.to_dict() for w in wps],
+        )
         return spec.to_dict()
 
     @app.get("/api/missions")
@@ -531,6 +537,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         _require_command_mode()
         try:
             spec = mission_registry.start(mission_id)
+            db.update_mission_status(mission_id, "ACTIVE", phase="EXECUTE")
+            db.record_mission_event(mission_id, "started", phase="EXECUTE")
             return spec.to_dict()
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -539,9 +547,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def abort_mission(mission_id: str) -> dict:
         try:
             spec = mission_registry.abort(mission_id)
+            db.update_mission_status(mission_id, "ABORTED", phase="ABORT")
+            db.record_mission_event(mission_id, "aborted", phase="ABORT")
             return spec.to_dict()
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/missions/{mission_id}/events")
+    async def get_mission_events(mission_id: str) -> dict:
+        spec = mission_registry.get(mission_id)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="mission not found")
+        return {"events": db.get_mission_events(mission_id)}
 
     # -- V0.9 hardware mode / preflight ----------------------------------------
     @app.get("/api/hardware-mode")
