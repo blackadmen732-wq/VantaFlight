@@ -110,7 +110,8 @@ class ClassicalTargetDetector:
                     continue
                 corners[:, 0] += x0
                 corners[:, 1] += y0
-                corners = order_corners_clockwise(corners)
+                if len(corners) == 4:
+                    corners = order_corners_clockwise(corners)
                 rect = cv2.minAreaRect(contour)
                 rw_box, rh_box = rect[1]
                 ratio = max(rw_box, rh_box) / max(1e-9, min(rw_box, rh_box))

@@ -169,7 +169,7 @@ class AutonomyLoop:
         This method is designed to be called from an async context at the
         configured loop rate.
         """
-        if self._state in (AutonomyState.IDLE, AutonomyState.COMPLETE, AutonomyState.FAILED):
+        if self._state in (AutonomyState.IDLE, AutonomyState.PAUSED, AutonomyState.COMPLETE, AutonomyState.FAILED):
             return None
 
         tick_start = time.monotonic()
@@ -201,7 +201,7 @@ class AutonomyLoop:
                     return None
         self._last_aircraft_pos = aircraft_truth.position.copy()
 
-        scene = self._build_scene(gate_targets)
+        scene = self._build_scene(gate_targets, self._gate_tracker.current_gate_index)
 
         try:
             desired = self._planner.plan(
@@ -265,12 +265,13 @@ class AutonomyLoop:
         self._on_setpoint.append(callback)
 
     @staticmethod
-    def _build_scene(gate_targets: list[GateTarget] | None) -> _SimpleScene:
+    def _build_scene(gate_targets: list[GateTarget] | None, current_gate_index: int = 0) -> _SimpleScene:
         if not gate_targets:
             return _SimpleScene()
-        current = gate_targets[0] if len(gate_targets) > 0 else None
-        next_g = gate_targets[1] if len(gate_targets) > 1 else None
-        future = gate_targets[2] if len(gate_targets) > 2 else None
+        remaining = gate_targets[current_gate_index:]
+        current = remaining[0] if len(remaining) > 0 else None
+        next_g = remaining[1] if len(remaining) > 1 else None
+        future = remaining[2] if len(remaining) > 2 else None
         return _SimpleScene(current=current, next_gate=next_g, future=future)
 
     def reset(self) -> None:

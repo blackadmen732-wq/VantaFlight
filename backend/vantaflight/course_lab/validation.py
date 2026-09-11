@@ -249,6 +249,18 @@ class CourseValidator:
         max_turn_angle: float = 2.45,
         self_intersection_clearance: float = .15,
     ) -> None:
+        for name, val in [
+            ("min_spacing", min_spacing),
+            ("drone_radius", drone_radius),
+            ("obstacle_clearance", obstacle_clearance),
+            ("max_vertical_grade", max_vertical_grade),
+            ("max_turn_angle", max_turn_angle),
+            ("self_intersection_clearance", self_intersection_clearance),
+        ]:
+            if not math.isfinite(val) or val < 0:
+                raise ValueError(f"{name} must be a non-negative finite number")
+        if max_spacing is not None and (not math.isfinite(max_spacing) or max_spacing < 0):
+            raise ValueError("max_spacing must be a non-negative finite number")
         self.min_spacing = float(min_spacing)
         self.max_spacing = max_spacing
         self.drone_radius = float(drone_radius)

@@ -76,25 +76,33 @@ class MAVSDKClient:
         except Exception as e:
             raise MAVSDKError("PX4_CONNECTION_TIMEOUT", str(e))
 
+        async def _wait_connected():
+            async for state in self._system.core.connection_state():
+                if state.is_connected:
+                    self._connected = True
+                    return
+                await asyncio.sleep(0.1)
+
         try:
-            async with asyncio.timeout(self._config.connection_timeout):
-                async for state in self._system.core.connection_state():
-                    if state.is_connected:
-                        self._connected = True
-                        break
-                    await asyncio.sleep(0.1)
-        except (asyncio.TimeoutError, TimeoutError):
+            await asyncio.wait_for(
+                _wait_connected(), timeout=self._config.connection_timeout
+            )
+        except asyncio.TimeoutError:
             raise MAVSDKError("PX4_CONNECTION_TIMEOUT", "timed out waiting for PX4 connection")
+
+        async def _wait_health():
+            async for health in self._system.telemetry.health():
+                if health.is_global_position_ok and health.is_home_position_ok:
+                    return True
+                await asyncio.sleep(0.5)
+            return False
 
         health_ok = False
         try:
-            async with asyncio.timeout(self._config.health_timeout):
-                async for health in self._system.telemetry.health():
-                    if health.is_global_position_ok and health.is_home_position_ok:
-                        health_ok = True
-                        break
-                    await asyncio.sleep(0.5)
-        except (asyncio.TimeoutError, TimeoutError):
+            health_ok = await asyncio.wait_for(
+                _wait_health(), timeout=self._config.health_timeout
+            )
+        except asyncio.TimeoutError:
             pass
         except Exception:
             pass

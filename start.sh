@@ -7,22 +7,29 @@ FRONTEND="$ROOT/frontend"
 
 echo "=== VantaFlight v0.9.0 — Local Startup ==="
 
+# Resolve Python — prefer the project venv, fall back to system python3.
+if [ -x "$BACKEND/.venv/bin/python" ]; then
+    PYTHON="$BACKEND/.venv/bin/python"
+else
+    PYTHON="python3"
+fi
+
 # Environment check
 echo "[1/4] Checking environment..."
-python3 -c "import sys; assert sys.version_info >= (3, 11), f'Python 3.11+ required, got {sys.version}'"
-python3 -c "import numpy, cv2, scipy, fastapi, uvicorn; print('  Dependencies OK')"
+$PYTHON -c "import sys; assert sys.version_info >= (3, 11), f'Python 3.11+ required, got {sys.version}'"
+$PYTHON -c "import numpy, cv2, scipy, fastapi, uvicorn; print('  Dependencies OK')"
 
-# Backend
+# Backend — bind to localhost only (no network exposure)
 echo "[2/4] Starting backend on :8000..."
 cd "$BACKEND"
-PYTHONPATH="$BACKEND" uvicorn vantaflight.main:app \
-    --host 0.0.0.0 --port 8000 --reload --log-level info &
+PYTHONPATH="$BACKEND" $PYTHON -m uvicorn vantaflight.main:app \
+    --host 127.0.0.1 --port 8000 --reload --log-level info &
 BACKEND_PID=$!
 
 # Frontend
 echo "[3/4] Starting frontend dev server on :5173..."
 cd "$FRONTEND"
-npm run dev -- --host 0.0.0.0 --port 5173 &
+npm run dev -- --host 127.0.0.1 --port 5173 &
 FRONTEND_PID=$!
 
 cleanup() {

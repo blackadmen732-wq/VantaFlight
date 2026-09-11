@@ -166,7 +166,7 @@ class TrainingEngine:
                 sim_time += tick_dt
                 self._sim_runner.tick(sim_time)
 
-            sim_result = self._sim_runner.stop()
+            sim_result = self._sim_runner.stop()  # idempotent if tick() already stopped
 
             result.gates_passed = sim_result.gates_passed
             result.total_gates = sim_result.total_gates

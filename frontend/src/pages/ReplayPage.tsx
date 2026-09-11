@@ -50,14 +50,20 @@ export default function ReplayPage() {
   useEffect(() => {
     const poll = async () => {
       try {
-        const s = await get<ReplayStatus>("/api/replay/status");
-        setStatus(s);
+        if (status?.state === "PLAYING") {
+          const tick = await postJson<{ status: ReplayStatus }>("/api/replay/tick");
+          setStatus(tick.status);
+        } else {
+          const s = await get<ReplayStatus>("/api/replay/status");
+          setStatus(s);
+        }
       } catch { /* ignore */ }
     };
     poll();
-    const id = setInterval(poll, 1000);
+    const rate = status?.state === "PLAYING" ? 100 : 1000;
+    const id = setInterval(poll, rate);
     return () => clearInterval(id);
-  }, []);
+  }, [status?.state]);
 
   const load = async (flightId: number) => {
     try {

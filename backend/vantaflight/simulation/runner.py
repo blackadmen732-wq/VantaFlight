@@ -110,6 +110,12 @@ class SimulationRunner:
         self._state = SimSessionState.RUNNING
 
     def stop(self, error: str | None = None) -> SimSessionResult:
+        if self._state in (SimSessionState.COMPLETE, SimSessionState.FAILED):
+            return self._results[-1] if self._results else SimSessionResult(
+                session_id=self._session_id or "unknown",
+                course_id=self._world.course_id if self._world else "unknown",
+                state=self._state,
+            )
         final_state = SimSessionState.FAILED if error else SimSessionState.COMPLETE
         self._state = final_state
 

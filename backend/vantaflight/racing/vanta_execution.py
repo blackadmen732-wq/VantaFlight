@@ -142,6 +142,12 @@ class VantaExecution:
 
         SimulationOnlyExecutionGuard.validate_permit(self._permit)
 
+        age = time.monotonic() - desired.timestamp if desired.timestamp > 0 else 0.0
+        if age > self._max_setpoint_age:
+            self._metrics.setpoints_rejected += 1
+            logger.debug("Stale trajectory rejected (age=%.3fs)", age)
+            return self._hold_setpoint(desired.timestamp, desired.trajectory_id)
+
         if desired.planner_confidence < self._confidence_floor:
             self._metrics.confidence_holds += 1
             if self._mode != ExecutionMode.HOLD:
@@ -161,7 +167,7 @@ class VantaExecution:
             position_ned=np.array(desired.position, dtype=np.float64),
             velocity_ned=np.array(desired.velocity, dtype=np.float64),
             acceleration_ned=np.array(desired.acceleration, dtype=np.float64),
-            yaw_deg=float(desired.yaw),
+            yaw_deg=float(np.degrees(desired.yaw)),
             timestamp=desired.timestamp,
             trajectory_id=desired.trajectory_id,
             confidence=desired.planner_confidence,

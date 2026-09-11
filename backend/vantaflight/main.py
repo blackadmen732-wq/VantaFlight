@@ -226,25 +226,37 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def disconnect() -> dict:
         return (await controller.disconnect()).model_dump(mode="json")
 
+    def _require_command_mode() -> None:
+        if not (hw_mode_manager.is_simulation or hw_mode_manager.can_command):
+            raise HTTPException(
+                status_code=403,
+                detail=f"commands blocked in hardware mode {hw_mode_manager.mode.value}",
+            )
+
     @app.post("/api/arm")
     async def arm() -> dict:
+        _require_command_mode()
         return (await controller.command("arm")).model_dump(mode="json")
 
     @app.post("/api/disarm")
     async def disarm() -> dict:
+        _require_command_mode()
         return (await controller.command("disarm")).model_dump(mode="json")
 
     @app.post("/api/takeoff")
     async def takeoff(req: TakeoffRequest | None = None) -> dict:
+        _require_command_mode()
         target = req.target_altitude_m if req else 5.0
         return (await controller.command("takeoff", target_altitude_m=target)).model_dump(mode="json")
 
     @app.post("/api/hold")
     async def hold() -> dict:
+        _require_command_mode()
         return (await controller.command("hold")).model_dump(mode="json")
 
     @app.post("/api/land")
     async def land() -> dict:
+        _require_command_mode()
         return (await controller.command("land")).model_dump(mode="json")
 
     @app.get("/api/telemetry")

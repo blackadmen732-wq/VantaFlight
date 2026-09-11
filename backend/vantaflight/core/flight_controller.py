@@ -85,19 +85,20 @@ class FlightController:
         return CommandResult(command="connect", accepted=True, message=f"connected to {caps.name}")
 
     async def disconnect(self) -> CommandResult:
-        if self._connections.adapter is None:
-            return CommandResult(command="disconnect", accepted=False, message="not connected")
+        async with self._connect_lock:
+            if self._connections.adapter is None:
+                return CommandResult(command="disconnect", accepted=False, message="not connected")
 
-        if self._session_state in _TERMINAL:
+            if self._session_state in _TERMINAL:
+                await self._connections.disconnect()
+                self._flight_id = None
+                self._session_state = SessionState.NO_SESSION
+                return CommandResult(command="disconnect", accepted=True, message="disconnected (session already ended)")
+
             await self._connections.disconnect()
-            self._flight_id = None
-            self._session_state = SessionState.NO_SESSION
-            return CommandResult(command="disconnect", accepted=True, message="disconnected (session already ended)")
-
-        await self._connections.disconnect()
-        self._log_event("disconnected", "disconnected from drone")
-        self._end_flight("completed")
-        return CommandResult(command="disconnect", accepted=True, message="disconnected")
+            self._log_event("disconnected", "disconnected from drone")
+            self._end_flight("completed")
+            return CommandResult(command="disconnect", accepted=True, message="disconnected")
 
     # -- commands -----------------------------------------------------------
     async def command(self, name: str, **kwargs) -> CommandResult:
