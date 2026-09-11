@@ -16,7 +16,7 @@ fi
 
 # Environment check
 echo "[1/4] Checking environment..."
-$PYTHON -c "import sys; assert sys.version_info >= (3, 11), f'Python 3.11+ required, got {sys.version}'"
+$PYTHON -c "import sys; assert sys.version_info >= (3, 10), f'Python 3.10+ required, got {sys.version}'"
 $PYTHON -c "import numpy, cv2, scipy, fastapi, uvicorn; print('  Dependencies OK')"
 
 # Backend — bind to localhost only (no network exposure)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import logging
 import threading
 import time
 from collections import deque
@@ -14,6 +15,8 @@ import cv2
 import numpy as np
 
 from .concepts import CameraProfile, FramePacket
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -604,13 +607,19 @@ class CameraManager:
 
         async def loop() -> None:
             while self._running:
-                result = await self.process_latest(processor, max_age_s=max_age_s)
-                if result is None:
-                    await asyncio.sleep(self.idle_sleep_s)
-                elif on_result is not None:
-                    callback_result = on_result(result)
-                    if asyncio.iscoroutine(callback_result):
-                        await callback_result
+                try:
+                    result = await self.process_latest(processor, max_age_s=max_age_s)
+                    if result is None:
+                        await asyncio.sleep(self.idle_sleep_s)
+                    elif on_result is not None:
+                        callback_result = on_result(result)
+                        if asyncio.iscoroutine(callback_result):
+                            await callback_result
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("vision processing loop failed")
+                    self._running = False
 
         self._processing_task = asyncio.create_task(loop(), name="vision-process-latest")
         return self._processing_task

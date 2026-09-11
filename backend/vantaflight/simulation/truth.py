@@ -94,8 +94,19 @@ class SimulationTruth:
                 cross_t = -d_prev / max(d_curr - d_prev, 1e-9)
                 cross_point = aircraft_prev_pos + cross_t * (aircraft_pos - aircraft_prev_pos)
                 offset = cross_point - gt.position
-                lateral = float(np.linalg.norm(offset - np.dot(offset, gt.normal) * gt.normal))
-                if lateral <= max(gt.width, gt.height) / 2.0 + aircraft_radius:
+                in_plane = offset - np.dot(offset, gt.normal) * gt.normal
+                world_up = np.array([0.0, 0.0, 1.0])
+                right = np.cross(gt.normal, world_up)
+                right_norm = float(np.linalg.norm(right))
+                if right_norm < 1e-9:
+                    right = np.array([1.0, 0.0, 0.0])
+                else:
+                    right = right / right_norm
+                up = np.cross(right, gt.normal)
+                lateral_h = abs(float(np.dot(in_plane, right)))
+                lateral_v = abs(float(np.dot(in_plane, up)))
+                if (lateral_h <= gt.width / 2.0 + aircraft_radius
+                        and lateral_v <= gt.height / 2.0 + aircraft_radius):
                     self._truth.gates[gid] = GateTruth(
                         gate_id=gid,
                         position=gt.position,

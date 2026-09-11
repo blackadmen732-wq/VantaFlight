@@ -43,6 +43,7 @@ class Telemetry(BaseModel):
     heading: float = 0.0
     battery_percentage: float = 100.0
     connection_quality: ConnectionQuality = ConnectionQuality.NONE
+    health_all_ok: bool = True
 
     @property
     def airborne(self) -> bool:
