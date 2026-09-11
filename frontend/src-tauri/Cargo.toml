@@ -3,15 +3,7 @@ name = "vantaflight"
 version = "0.1.0"
 description = "VantaFlight desktop shell"
 edition = "2021"
-rust-version = "1.77"
-
-# NOTE: This is the Tauri desktop-packaging scaffold. It is intentionally left
-# unbuilt for the foundation PR; run `npm run tauri dev` later to package the
-# downloadable Linux desktop app.
-
-[lib]
-name = "vantaflight_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+rust-version = "1.94"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
