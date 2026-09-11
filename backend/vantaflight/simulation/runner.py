@@ -5,10 +5,13 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from .models import SimSessionConfig, SimSessionState, SimulationWorld
 from .truth import AircraftTruth, SimulationTruth
 from .faults import FaultInjector
 from .course_bridge import CourseBridge
+from .kinematic import KinematicDriver
 
 
 @dataclass
@@ -47,7 +50,7 @@ class SimulationRunner:
     drive simulation runs against the synthetic or Gazebo camera.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, aircraft_speed: float = 5.0) -> None:
         self._session_counter = 0
         self._state = SimSessionState.IDLE
         self._config: SimSessionConfig | None = None
@@ -58,6 +61,16 @@ class SimulationRunner:
         self._start_time: float = 0.0
         self._results: list[SimSessionResult] = []
         self._bridge = CourseBridge()
+        self._aircraft_speed = aircraft_speed
+        self._kinematic = KinematicDriver(
+            max_speed=aircraft_speed,
+            max_accel=aircraft_speed * 0.6,
+        )
+        self._aircraft_pos: np.ndarray = np.zeros(3)
+        self._aircraft_vel: np.ndarray = np.zeros(3)
+        self._next_gate_idx: int = 0
+        self._gates_ordered: list = []
+        self._prev_sim_time: float = 0.0
 
     @property
     def state(self) -> SimSessionState:
@@ -89,6 +102,11 @@ class SimulationRunner:
         self._world = world
         self._truth = SimulationTruth(world)
         self._fault_injector = FaultInjector(config.faults) if config.faults else FaultInjector()
+        self._aircraft_pos = world.start_position.copy()
+        self._aircraft_vel = np.zeros(3)
+        self._next_gate_idx = 0
+        self._gates_ordered = sorted(world.gates, key=lambda g: g.order)
+        self._prev_sim_time = 0.0
         self._state = SimSessionState.PREPARING
         self._state = SimSessionState.READY
         return self._session_id
@@ -141,12 +159,51 @@ class SimulationRunner:
         self._truth = None
         self._fault_injector = None
         self._session_id = None
+        self._gates_ordered = []
 
     def tick(self, sim_time: float) -> None:
         if self._state != SimSessionState.RUNNING:
             return
+
+        dt = sim_time - self._prev_sim_time
+        self._prev_sim_time = sim_time
+        if dt <= 0:
+            return
+
+        if not self._world or not self._truth:
+            return
+
+        prev_pos = self._aircraft_pos.copy()
+        prev_vel = self._aircraft_vel.copy()
+
+        if self._next_gate_idx < len(self._gates_ordered):
+            target = self._gates_ordered[self._next_gate_idx].position
+            desired_vel = self._kinematic.navigate_toward(
+                self._aircraft_pos, target, self._aircraft_speed,
+            )
+        else:
+            desired_vel = np.zeros(3)
+
+        self._aircraft_pos, self._aircraft_vel = self._kinematic.step(
+            self._aircraft_pos, self._aircraft_vel, desired_vel, dt,
+        )
+
+        truth_state = self._kinematic.build_truth(
+            sim_time, self._aircraft_pos, self._aircraft_vel, prev_vel, dt,
+        )
+        self._truth.update_aircraft(truth_state)
+
+        crossed = self._truth.check_gate_crossing(self._aircraft_pos, prev_pos)
+        if crossed is not None and self._next_gate_idx < len(self._gates_ordered):
+            if crossed == self._gates_ordered[self._next_gate_idx].gate_id:
+                self._next_gate_idx += 1
+                if self._next_gate_idx >= len(self._gates_ordered):
+                    self.stop()
+                    return
+
         if self._fault_injector:
-            self._fault_injector.tick()
+            self._fault_injector.tick(sim_time)
+
         if self._config and sim_time > self._config.max_time_s:
             self.stop(error="max_time_exceeded")
 

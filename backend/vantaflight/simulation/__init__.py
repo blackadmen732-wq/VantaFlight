@@ -11,6 +11,7 @@ from .truth import TruthSource, SimulationTruth
 from .runner import SimulationRunner
 from .course_bridge import CourseBridge
 from .faults import FaultInjector
+from .kinematic import KinematicDriver
 from .camera import SimulatedCameraSource
 
 __all__ = [
@@ -22,6 +23,7 @@ __all__ = [
     "SimSessionConfig",
     "SimSessionState",
     "SimulatedCameraSource",
+    "KinematicDriver",
     "SimulationRunner",
     "SimulationTruth",
     "SimulationWorld",

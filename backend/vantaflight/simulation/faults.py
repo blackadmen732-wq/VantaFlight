@@ -15,10 +15,15 @@ class ActiveFault:
     start_time: float
     duration_s: float
     magnitude: float
+    _use_sim_time: bool = False
+
+    def is_expired(self, now: float | None = None) -> bool:
+        t = now if now is not None else time.monotonic()
+        return t - self.start_time > self.duration_s
 
     @property
     def expired(self) -> bool:
-        return time.monotonic() - self.start_time > self.duration_s
+        return self.is_expired()
 
 
 class FaultInjector:
@@ -47,9 +52,9 @@ class FaultInjector:
         self._rngs.pop(fault_type, None)
         self._active.pop(fault_type, None)
 
-    def tick(self) -> list[ActiveFault]:
-        now = time.monotonic()
-        expired = [ft for ft, af in self._active.items() if af.expired]
+    def tick(self, sim_time: float | None = None) -> list[ActiveFault]:
+        now = sim_time if sim_time is not None else time.monotonic()
+        expired = [ft for ft, af in self._active.items() if af.is_expired(now)]
         for ft in expired:
             self._history.append({
                 "fault_type": ft.value,
@@ -80,9 +85,9 @@ class FaultInjector:
     def active_faults(self) -> dict[FaultType, ActiveFault]:
         return dict(self._active)
 
-    def is_active(self, fault_type: FaultType) -> bool:
+    def is_active(self, fault_type: FaultType, sim_time: float | None = None) -> bool:
         af = self._active.get(fault_type)
-        return af is not None and not af.expired
+        return af is not None and not af.is_expired(sim_time)
 
     def apply_to_frame(self, frame: np.ndarray) -> np.ndarray:
         result = frame
