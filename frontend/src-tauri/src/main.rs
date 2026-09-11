@@ -3,7 +3,6 @@
 
 // Minimal Tauri desktop shell. The UI is the Vite/React app; the Flight Core
 // (Python/FastAPI) runs locally and the frontend talks to it over HTTP/WS.
-// Packaging is intentionally left for a later PR.
 fn main() {
     tauri::Builder::default()
         .run(tauri::generate_context!())
