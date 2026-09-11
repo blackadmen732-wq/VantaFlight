@@ -160,15 +160,15 @@ class CourseValidationModel(BaseModel):
 
 
 class TrainingCampaignRequest(BaseModel):
-    name: str = "Untitled Campaign"
-    description: str = ""
+    name: str = Field("Untitled Campaign", min_length=1, max_length=200)
+    description: str = Field("", max_length=2000)
     course_modes: list[str] = Field(default_factory=lambda: ["RANDOM"])
     seed_range: tuple[int, int] = (0, 10)
     gate_counts: list[int] = Field(default_factory=lambda: [8, 12, 16])
     difficulty_tiers: list[str] = Field(default_factory=lambda: ["MODERATE"])
     fault_profiles: list[list[str]] = Field(default_factory=list)
-    max_time_per_run_s: float = 300.0
-    max_runs: int = 0
+    max_time_per_run_s: float = Field(300.0, gt=0, le=3600)
+    max_runs: int = Field(0, ge=0, le=10000)
     stop_on_failure: bool = False
 
 

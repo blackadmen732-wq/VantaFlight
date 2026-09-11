@@ -37,6 +37,9 @@ from .course_lab import CourseGenerator, CourseValidator, SafeVolume
 from .data import AsyncRecorder, FlightDatabase
 from .intelligence import IntelligenceRuntime
 from .models import AdapterType
+from .autonomy import AutonomyLoop, AutonomyConfig
+from .digital_twin.primitives import TwinSnapshotBuilder, TwinWorldSnapshot
+from .mission import MissionGoal, MissionRegistry, MissionSpec, MissionType, Waypoint
 from .runtime import (
     DeploymentMode,
     HardwareMode,
@@ -129,10 +132,39 @@ def create_app(db_path: str | None = None) -> FastAPI:
     perf_manager = VantaPerformanceManager()
     hw_profiler = HardwareProfiler()
     training_engine = TrainingEngine()
+
+    def _persist_training_run(result) -> None:
+        try:
+            status = "completed" if result.success else "failed"
+            db.start_simulation_run(
+                result.run_id,
+                course_id=result.config.course_mode,
+                metadata={
+                    "campaign_id": result.campaign_id,
+                    "seed": result.config.seed,
+                    "gate_count": result.config.gate_count,
+                    "gates_passed": result.gates_passed,
+                    "total_gates": result.total_gates,
+                    "race_time_s": result.race_time_s,
+                    "complete": result.complete,
+                    "faults_injected": result.faults_injected,
+                    "failures": result.failures,
+                },
+            )
+            db.finish_simulation_run(result.run_id, status)
+        except Exception:
+            pass
+
+    training_engine.set_run_callback(_persist_training_run)
+
     replay_loader = ReplayLoader(db)
     replay_player = ReplayPlayer()
     hw_mode_manager = HardwareModeManager()
     preflight_checker = PreflightChecker()
+    autonomy_loop = AutonomyLoop()
+    twin_builder = TwinSnapshotBuilder()
+    mission_registry = MissionRegistry()
+    _twin_snapshot: dict = {"ref": TwinWorldSnapshot(timestamp=0.0, sequence=0)}
     app.state.db = db
     app.state.supervisor = supervisor
     app.state.perf_manager = perf_manager
@@ -169,6 +201,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     "type": "simulation_state",
                     "data": intelligence.simulation.model_dump(mode="json"),
                 }
+            )
+            await hub.broadcast(
+                {"type": "autonomy_state", "data": autonomy_loop.to_dict()}
+            )
+            snapshot = twin_builder.build()
+            _twin_snapshot["ref"] = snapshot
+            await hub.broadcast(
+                {"type": "twin_snapshot", "data": snapshot.to_dict()}
             )
             elapsed = time.monotonic() - t_start
             await asyncio.sleep(max(0, period - elapsed))
@@ -427,25 +467,81 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/autonomy/status")
     async def autonomy_status() -> dict:
-        return {
-            "state": "IDLE",
-            "metrics": {
-                "loop_iterations": 0, "vision_results": 0,
-                "plans_generated": 0, "setpoints_sent": 0,
-                "gate_passes": 0, "recovery_events": 0,
-                "failures": 0, "avg_loop_ms": 0.0,
-                "state": "IDLE",
-            },
-            "gate_progression": {
-                "gates_passed": 0, "total_gates": 0,
-                "current_gate_index": 0, "is_complete": False,
-                "race_time_s": 0.0, "history": [],
-            },
-            "execution": {
-                "mode": "IDLE", "has_permit": False, "metrics": {},
-            },
-            "planner_state": "IDLE",
-        }
+        return autonomy_loop.to_dict()
+
+    @app.get("/api/twin/snapshot")
+    async def twin_snapshot() -> dict:
+        return _twin_snapshot["ref"].to_dict()
+
+    # -- Mission architecture --------------------------------------------------
+    class CreateMissionRequest(BaseModel):
+        mission_type: str = "RACE"
+        description: str = ""
+        waypoints: list[dict] = []
+        search_area: list[list[float]] = []
+        delivery_target: list[float] | None = None
+        return_home: bool = True
+        max_duration_s: float = 600.0
+
+    @app.post("/api/missions")
+    async def create_mission(req: CreateMissionRequest) -> dict:
+        try:
+            mtype = MissionType(req.mission_type)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid mission_type '{req.mission_type}'; valid: {[m.value for m in MissionType]}",
+            )
+        wps = tuple(
+            Waypoint(
+                x=w.get("x", 0), y=w.get("y", 0), z=w.get("z", 5),
+                speed_m_s=w.get("speed_m_s", 5.0),
+                heading_deg=w.get("heading_deg"),
+                hold_s=w.get("hold_s", 0),
+                label=w.get("label", ""),
+            )
+            for w in req.waypoints
+        )
+        area = tuple(tuple(float(v) for v in pt) for pt in req.search_area if len(pt) >= 3)
+        target = tuple(float(v) for v in req.delivery_target) if req.delivery_target and len(req.delivery_target) >= 3 else None
+        goal = MissionGoal(
+            description=req.description,
+            waypoints=wps,
+            search_area=area,
+            delivery_target=target,
+            return_home=req.return_home,
+            max_duration_s=req.max_duration_s,
+        )
+        spec = mission_registry.create_mission(mtype, goal)
+        return spec.to_dict()
+
+    @app.get("/api/missions")
+    async def list_missions() -> dict:
+        return {"missions": mission_registry.list_missions()}
+
+    @app.get("/api/missions/{mission_id}")
+    async def get_mission(mission_id: str) -> dict:
+        spec = mission_registry.get(mission_id)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="mission not found")
+        return spec.to_dict()
+
+    @app.post("/api/missions/{mission_id}/start")
+    async def start_mission(mission_id: str) -> dict:
+        _require_command_mode()
+        try:
+            spec = mission_registry.start(mission_id)
+            return spec.to_dict()
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/missions/{mission_id}/abort")
+    async def abort_mission(mission_id: str) -> dict:
+        try:
+            spec = mission_registry.abort(mission_id)
+            return spec.to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     # -- V0.9 hardware mode / preflight ----------------------------------------
     @app.get("/api/hardware-mode")
@@ -649,7 +745,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return replay_player.to_dict()
 
     class ReplaySeekRequest(BaseModel):
-        time_offset: float
+        time_offset: float = 0.0
 
     @app.post("/api/replay/seek")
     async def replay_seek(req: ReplaySeekRequest) -> dict:
