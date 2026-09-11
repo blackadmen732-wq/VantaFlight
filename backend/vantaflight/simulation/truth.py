@@ -105,8 +105,8 @@ class SimulationTruth:
                 up = np.cross(right, gt.normal)
                 lateral_h = abs(float(np.dot(in_plane, right)))
                 lateral_v = abs(float(np.dot(in_plane, up)))
-                if (lateral_h <= gt.width / 2.0 + aircraft_radius
-                        and lateral_v <= gt.height / 2.0 + aircraft_radius):
+                if (lateral_h <= gt.width / 2.0 - aircraft_radius
+                        and lateral_v <= gt.height / 2.0 - aircraft_radius):
                     self._truth.gates[gid] = GateTruth(
                         gate_id=gid,
                         position=gt.position,
