@@ -76,25 +76,33 @@ class MAVSDKClient:
         except Exception as e:
             raise MAVSDKError("PX4_CONNECTION_TIMEOUT", str(e))
 
+        async def _wait_connected():
+            async for state in self._system.core.connection_state():
+                if state.is_connected:
+                    self._connected = True
+                    return
+                await asyncio.sleep(0.1)
+
         try:
-            async with asyncio.timeout(self._config.connection_timeout):
-                async for state in self._system.core.connection_state():
-                    if state.is_connected:
-                        self._connected = True
-                        break
-                    await asyncio.sleep(0.1)
-        except (asyncio.TimeoutError, TimeoutError):
+            await asyncio.wait_for(
+                _wait_connected(), timeout=self._config.connection_timeout
+            )
+        except asyncio.TimeoutError:
             raise MAVSDKError("PX4_CONNECTION_TIMEOUT", "timed out waiting for PX4 connection")
+
+        async def _wait_health():
+            async for health in self._system.telemetry.health():
+                if health.is_global_position_ok and health.is_home_position_ok:
+                    return True
+                await asyncio.sleep(0.5)
+            return False
 
         health_ok = False
         try:
-            async with asyncio.timeout(self._config.health_timeout):
-                async for health in self._system.telemetry.health():
-                    if health.is_global_position_ok and health.is_home_position_ok:
-                        health_ok = True
-                        break
-                    await asyncio.sleep(0.5)
-        except (asyncio.TimeoutError, TimeoutError):
+            health_ok = await asyncio.wait_for(
+                _wait_health(), timeout=self._config.health_timeout
+            )
+        except asyncio.TimeoutError:
             pass
         except Exception:
             pass
@@ -248,6 +256,53 @@ class MAVSDKClient:
             for t in tasks:
                 t.cancel()
             raise
+
+    async def start_offboard(self) -> None:
+        self._require_connected()
+        try:
+            from mavsdk.offboard import PositionNedYaw
+            initial = PositionNedYaw(0.0, 0.0, 0.0, 0.0)
+            await self._system.offboard.set_position_ned(initial)
+            await self._system.offboard.start()
+        except ImportError:
+            raise MAVSDKError("MAVSDK_NOT_FOUND", "mavsdk offboard module not available")
+        except Exception as e:
+            raise MAVSDKError("PX4_OFFBOARD_FAILED", f"offboard start failed: {e}")
+
+    async def stop_offboard(self) -> None:
+        self._require_connected()
+        try:
+            await self._system.offboard.stop()
+        except Exception as e:
+            raise MAVSDKError("PX4_OFFBOARD_FAILED", f"offboard stop failed: {e}")
+
+    async def set_position_ned(
+        self, north_m: float, east_m: float, down_m: float, yaw_deg: float,
+    ) -> None:
+        self._require_connected()
+        try:
+            from mavsdk.offboard import PositionNedYaw
+            await self._system.offboard.set_position_ned(
+                PositionNedYaw(north_m, east_m, down_m, yaw_deg)
+            )
+        except ImportError:
+            raise MAVSDKError("MAVSDK_NOT_FOUND", "mavsdk offboard module not available")
+        except Exception as e:
+            raise MAVSDKError("PX4_COMMAND_REJECTED", f"set_position_ned failed: {e}")
+
+    async def set_velocity_ned(
+        self, north_m_s: float, east_m_s: float, down_m_s: float, yaw_deg: float,
+    ) -> None:
+        self._require_connected()
+        try:
+            from mavsdk.offboard import VelocityNedYaw
+            await self._system.offboard.set_velocity_ned(
+                VelocityNedYaw(north_m_s, east_m_s, down_m_s, yaw_deg)
+            )
+        except ImportError:
+            raise MAVSDKError("MAVSDK_NOT_FOUND", "mavsdk offboard module not available")
+        except Exception as e:
+            raise MAVSDKError("PX4_COMMAND_REJECTED", f"set_velocity_ned failed: {e}")
 
     def _require_connected(self) -> None:
         if not self._connected or self._system is None:

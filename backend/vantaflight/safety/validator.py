@@ -37,6 +37,8 @@ class SafetyValidator:
             return SafetyViolation("arm", "cannot arm while disconnected")
         if t.armed:
             return SafetyViolation("arm", "already armed")
+        if not t.health_all_ok:
+            return SafetyViolation("arm", "pre-arm health check failed")
         return None
 
     def _check_disarm(self, t: Telemetry) -> SafetyViolation | None:

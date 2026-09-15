@@ -1,14 +1,41 @@
 import type {
   AdapterType,
+  AutonomyState,
+  CampaignAnalysis,
   Capabilities,
+  CameraProfile,
   CommandResult,
+  CourseDetail,
+  CourseGenerationRequest,
   Diagnostics,
   DiscoveredDrone,
+  FaultProfileInfo,
+  HardwareInfo,
   HealthResponse,
+  FusedTargetEstimate,
+  PerformanceState,
+  RaceStateFrame,
+  RuntimeState,
+  RunMetric,
   RunSummary,
+  SceneState,
+  SimulationState,
+  TrainingCampaign,
+  TrainingRunResult,
+  TrainingSummary,
   TwinState,
+  VisionStatus,
   WsFrame,
 } from "./types";
+
+async function parseError(res: Response): Promise<Error> {
+  try {
+    const body = await res.json() as { detail?: string; message?: string };
+    return new Error(body.detail ?? body.message ?? `request failed: ${res.status}`);
+  } catch {
+    return new Error(`request failed: ${res.status}`);
+  }
+}
 
 async function post(path: string, body?: unknown): Promise<CommandResult> {
   const res = await fetch(path, {
@@ -16,11 +43,23 @@ async function post(path: string, body?: unknown): Promise<CommandResult> {
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (!res.ok) throw await parseError(res);
   return (await res.json()) as CommandResult;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as T;
 }
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
+  if (!res.ok) throw await parseError(res);
   return (await res.json()) as T;
 }
 
@@ -45,6 +84,41 @@ export const api = {
   runSummary: () =>
     get<{ source: string; summary: RunSummary }>("/api/run-summary").then((r) => r.summary),
   diagnostics: () => get<Diagnostics>("/api/diagnostics"),
+  visionStatus: () => get<VisionStatus>("/api/vision/status"),
+  cameraProfiles: () => get<CameraProfile[]>("/api/vision/camera-profiles"),
+  visionTracks: () => get<FusedTargetEstimate[]>("/api/vision/tracks"),
+  scene: () => get<SceneState>("/api/scene"),
+  race: () => get<RaceStateFrame>("/api/race"),
+  simulationStatus: () => get<SimulationState>("/api/simulation/status"),
+  runMetrics: () => get<RunMetric[]>("/api/run-metrics"),
+  generateCourse: (request: CourseGenerationRequest) =>
+    postJson<CourseDetail>("/api/courses/generate", request),
+  course: (courseId: string) =>
+    get<CourseDetail>(`/api/courses/${encodeURIComponent(courseId)}`),
+
+  runtimeStatus: () => get<RuntimeState>("/api/runtime/status"),
+  performanceStatus: () => get<PerformanceState>("/api/runtime/performance"),
+  hardwareInfo: () => get<HardwareInfo>("/api/runtime/hardware"),
+  autonomyStatus: () => get<AutonomyState>("/api/autonomy/status"),
+
+  listCampaigns: () => get<TrainingCampaign[]>("/api/training/campaigns"),
+  createCampaign: (config: Record<string, unknown>) =>
+    postJson<TrainingCampaign>("/api/training/campaigns", config),
+  startCampaign: (id: string) => post(`/api/training/campaigns/${encodeURIComponent(id)}/start`),
+  pauseCampaign: (id: string) => post(`/api/training/campaigns/${encodeURIComponent(id)}/pause`),
+  cancelCampaign: (id: string) => post(`/api/training/campaigns/${encodeURIComponent(id)}/cancel`),
+  campaignSummary: (id: string) =>
+    get<TrainingSummary>(`/api/training/campaigns/${encodeURIComponent(id)}/summary`),
+  campaignAnalysis: (id: string) =>
+    get<CampaignAnalysis>(`/api/training/campaigns/${encodeURIComponent(id)}/analysis`),
+  runNextTraining: (id: string) =>
+    postJson<TrainingRunResult | { status: string; campaign_id: string }>(
+      `/api/training/campaigns/${encodeURIComponent(id)}/run-next`,
+      {},
+    ),
+  autoCurriculum: (config: Record<string, unknown>) =>
+    postJson<Record<string, unknown>>("/api/training/auto-curriculum", config),
+  faultProfiles: () => get<Record<string, FaultProfileInfo>>("/api/training/fault-profiles"),
 };
 
 export function openTelemetryStream(

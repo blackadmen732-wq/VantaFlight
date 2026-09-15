@@ -1,8 +1,40 @@
 # VantaFlight Project Status
 
-## Current Version: 0.3.0 — Simulation Control Foundation
+## Current Version: 0.5.0 — Backend Intelligence
 
-### What's Done
+V0.5 is under review on its feature branch. The V0.3 Simulation Control
+Foundation remains intact beneath the new packages.
+
+### V0.5 implementation
+
+- [x] Camera/profile/frame abstractions and synthetic/file sources
+- [x] Bounded newest-frame buffering with stale-frame drops
+- [x] Configurable OpenCV preprocessing and classical target detection
+- [x] solvePnP pose estimation with reprojection validation
+- [x] Timestamp-driven target tracking, optical flow, ROI policy, association
+- [x] Fusion, bounded scene memory, latency prediction, lock state machine
+- [x] Optional asynchronous neural detector interface (no bundled model)
+- [x] VantaRace state machine, smooth trajectory, lookahead, speed envelope
+- [x] Continuous confidence-aware aggression scaling
+- [x] Simulation-only autonomous execution guard
+- [x] Seeded path-first CourseLab with all seven mathematical modes
+- [x] Course difficulty, run analysis, and bounded parameter experiments
+- [x] Digital Twin simulator-truth validation boundary
+- [x] Additive SQLite v3 schema and bounded asynchronous recorder
+- [x] Typed V0.5 REST/WebSocket contracts without video on telemetry transport
+- [x] Synthetic/property/lifecycle test coverage and benchmark command
+
+### V0.5 verification
+
+- Local automated test results are recorded in the pull request.
+- `TESTED IN CI`: backend and frontend VantaFlight CI jobs pass on the PR.
+- `SIMULATION VERIFIED`: not claimed until a live PX4/Gazebo run succeeds.
+- `HARDWARE VERIFIED`: no V0.5 autonomous behavior.
+
+See [V0.5 Backend Intelligence](V0.5_BACKEND_INTELLIGENCE.md) for the complete
+scope/status matrix and safety boundaries.
+
+### V0.3 Foundation (preserved)
 
 **Job 1: Hardened Flight Core**
 - [x] Explicit session state machine (NO_SESSION → CONNECTED → ACTIVE → COMPLETED/INTERRUPTED)

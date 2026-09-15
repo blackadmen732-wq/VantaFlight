@@ -98,6 +98,22 @@ class PX4SITLAdapter:
             connection_quality=quality,
         )
 
+    async def start_offboard(self) -> None:
+        await self._client.start_offboard()
+
+    async def stop_offboard(self) -> None:
+        await self._client.stop_offboard()
+
+    async def set_position_ned(
+        self, north_m: float, east_m: float, down_m: float, yaw_deg: float,
+    ) -> None:
+        await self._client.set_position_ned(north_m, east_m, down_m, yaw_deg)
+
+    async def set_velocity_ned(
+        self, north_m_s: float, east_m_s: float, down_m_s: float, yaw_deg: float,
+    ) -> None:
+        await self._client.set_velocity_ned(north_m_s, east_m_s, down_m_s, yaw_deg)
+
     def get_capabilities(self) -> Capabilities:
         return Capabilities(
             name="PX4 SITL",
@@ -108,6 +124,7 @@ class PX4SITLAdapter:
                 "arm", "takeoff", "land", "hold",
                 "position", "velocity", "heading",
                 "gps", "battery", "simulation",
+                "offboard",
             ],
         )
 

@@ -3,18 +3,59 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from .api_models import (
+    AutoCurriculumRequest,
+    CameraProfileModel,
+    CourseDetailModel,
+    CourseGenerationRequest,
+    CourseValidationModel,
+    ExperimentResultModel,
+    HardwareModeTransitionRequest,
+    RaceStateModel,
+    RunMetricModel,
+    SceneStateModel,
+    SimulationStateModel,
+    TargetEstimateModel,
+    TrainingCampaignModel,
+    TrainingCampaignRequest,
+    TrainingSummaryModel,
+    VisionStatusModel,
+)
 from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_VERSION
 from .connection import ConnectionManager, DiscoveredDrone
 from .core import FlightController
-from .data import FlightDatabase
+from .course_lab import CourseGenerator, CourseValidator, SafeVolume
+from .data import AsyncRecorder, FlightDatabase
+from .intelligence import IntelligenceRuntime
 from .models import AdapterType
+from .autonomy import AutonomyLoop, AutonomyConfig
+from .digital_twin.primitives import TwinSnapshotBuilder, TwinWorldSnapshot
+from .mission import MissionGoal, MissionRegistry, MissionSpec, MissionType, Waypoint
+from .runtime import (
+    DeploymentMode,
+    HardwareMode,
+    HardwareModeManager,
+    HardwareProfiler,
+    PreflightChecker,
+    RuntimeSupervisor,
+    VantaPerformanceManager,
+)
+from .replay import ReplayLoader, ReplayPlayer
+from .training import (
+    CampaignConfig,
+    CurriculumBuilder,
+    DifficultyTier,
+    TrainingEngine,
+)
 
 
 class TakeoffRequest(BaseModel):
@@ -56,6 +97,7 @@ class ConnectionHub:
 def create_app(db_path: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        await recorder.start()
         app.state.stream_task = asyncio.create_task(stream_loop())
         try:
             yield
@@ -65,6 +107,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            await recorder.stop()
             db.close()
 
     app = FastAPI(
@@ -80,12 +123,56 @@ def create_app(db_path: str | None = None) -> FastAPI:
     )
 
     db = FlightDatabase(db_path or DB_PATH)
+    recorder = AsyncRecorder(db)
     connection_manager = ConnectionManager()
     controller = FlightController(db, connection_manager=connection_manager)
     hub = ConnectionHub()
+    intelligence = IntelligenceRuntime()
+    supervisor = RuntimeSupervisor()
+    perf_manager = VantaPerformanceManager()
+    hw_profiler = HardwareProfiler()
+    training_engine = TrainingEngine()
+
+    def _persist_training_run(result) -> None:
+        try:
+            status = "completed" if result.success else "failed"
+            db.start_simulation_run(
+                result.run_id,
+                course_id=result.config.course_mode,
+                metadata={
+                    "campaign_id": result.campaign_id,
+                    "seed": result.config.seed,
+                    "gate_count": result.config.gate_count,
+                    "gates_passed": result.gates_passed,
+                    "total_gates": result.total_gates,
+                    "race_time_s": result.race_time_s,
+                    "complete": result.complete,
+                    "faults_injected": result.faults_injected,
+                    "failures": result.failures,
+                },
+            )
+            db.finish_simulation_run(result.run_id, status)
+        except Exception:
+            pass
+
+    training_engine.set_run_callback(_persist_training_run)
+
+    replay_loader = ReplayLoader(db)
+    replay_player = ReplayPlayer()
+    hw_mode_manager = HardwareModeManager()
+    preflight_checker = PreflightChecker()
+    autonomy_loop = AutonomyLoop()
+    twin_builder = TwinSnapshotBuilder()
+    mission_registry = MissionRegistry()
+    _twin_snapshot: dict = {"ref": TwinWorldSnapshot(timestamp=0.0, sequence=0)}
     app.state.db = db
+    app.state.supervisor = supervisor
+    app.state.perf_manager = perf_manager
     app.state.controller = controller
     app.state.hub = hub
+    app.state.recorder = recorder
+    app.state.intelligence = intelligence
+    app.state.training_engine = training_engine
 
     async def stream_loop() -> None:
         period = 1.0 / STREAM_HZ
@@ -97,6 +184,32 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 await hub.broadcast({"type": "event", "data": event.model_dump(mode="json")})
             if controller.twin.active:
                 await hub.broadcast({"type": "twin", "data": controller.twin.state.to_dict()})
+            await hub.broadcast(
+                {
+                    "type": "vision_state",
+                    "data": intelligence.vision_status.model_dump(mode="json"),
+                }
+            )
+            await hub.broadcast(
+                {"type": "scene_state", "data": intelligence.scene.model_dump(mode="json")}
+            )
+            await hub.broadcast(
+                {"type": "race_state", "data": intelligence.race.model_dump(mode="json")}
+            )
+            await hub.broadcast(
+                {
+                    "type": "simulation_state",
+                    "data": intelligence.simulation.model_dump(mode="json"),
+                }
+            )
+            await hub.broadcast(
+                {"type": "autonomy_state", "data": autonomy_loop.to_dict()}
+            )
+            snapshot = twin_builder.build()
+            _twin_snapshot["ref"] = snapshot
+            await hub.broadcast(
+                {"type": "twin_snapshot", "data": snapshot.to_dict()}
+            )
             elapsed = time.monotonic() - t_start
             await asyncio.sleep(max(0, period - elapsed))
 
@@ -153,25 +266,37 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def disconnect() -> dict:
         return (await controller.disconnect()).model_dump(mode="json")
 
+    def _require_command_mode() -> None:
+        if not (hw_mode_manager.is_simulation or hw_mode_manager.can_command):
+            raise HTTPException(
+                status_code=403,
+                detail=f"commands blocked in hardware mode {hw_mode_manager.mode.value}",
+            )
+
     @app.post("/api/arm")
     async def arm() -> dict:
+        _require_command_mode()
         return (await controller.command("arm")).model_dump(mode="json")
 
     @app.post("/api/disarm")
     async def disarm() -> dict:
+        _require_command_mode()
         return (await controller.command("disarm")).model_dump(mode="json")
 
     @app.post("/api/takeoff")
     async def takeoff(req: TakeoffRequest | None = None) -> dict:
+        _require_command_mode()
         target = req.target_altitude_m if req else 5.0
         return (await controller.command("takeoff", target_altitude_m=target)).model_dump(mode="json")
 
     @app.post("/api/hold")
     async def hold() -> dict:
+        _require_command_mode()
         return (await controller.command("hold")).model_dump(mode="json")
 
     @app.post("/api/land")
     async def land() -> dict:
+        _require_command_mode()
         return (await controller.command("land")).model_dump(mode="json")
 
     @app.get("/api/telemetry")
@@ -211,6 +336,460 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "adapter": connection_manager.active.name if connection_manager.active else None,
             "metrics": controller.metrics.to_dict(),
             "twin_active": controller.twin.active,
+        }
+
+    # -- V0.5 backend-intelligence contracts -------------------------------
+    @app.get("/api/vision/status", response_model=VisionStatusModel)
+    async def vision_status() -> VisionStatusModel:
+        return intelligence.vision_status
+
+    @app.get("/api/vision/camera-profiles", response_model=list[CameraProfileModel])
+    async def camera_profiles() -> list[CameraProfileModel]:
+        return list(intelligence.camera_profiles.values())
+
+    @app.get("/api/vision/tracks", response_model=list[TargetEstimateModel])
+    async def vision_tracks() -> list[TargetEstimateModel]:
+        return list(intelligence.tracks.values())
+
+    @app.get("/api/scene", response_model=SceneStateModel)
+    async def scene_state() -> SceneStateModel:
+        return intelligence.scene
+
+    @app.get("/api/race", response_model=RaceStateModel)
+    async def race_state() -> RaceStateModel:
+        return intelligence.race
+
+    @app.get("/api/simulation/status", response_model=SimulationStateModel)
+    async def simulation_status() -> SimulationStateModel:
+        return intelligence.simulation
+
+    @app.get("/api/run-metrics", response_model=list[RunMetricModel])
+    async def run_metrics() -> list[RunMetricModel]:
+        return list(intelligence.run_metrics)
+
+    @app.get("/api/experiments", response_model=list[ExperimentResultModel])
+    async def experiment_results() -> list[ExperimentResultModel]:
+        return list(intelligence.experiments)
+
+    @app.post("/api/courses/generate", response_model=CourseDetailModel)
+    async def generate_course(req: CourseGenerationRequest) -> CourseDetailModel:
+        try:
+            volume = SafeVolume(
+                dimensions=(req.width, req.length, req.height),
+                floor=req.floor,
+                ceiling=req.ceiling,
+                boundary_margin=req.boundary_margin,
+            )
+            course = CourseGenerator(volume).generate(
+                req.mode, seed=req.seed, gate_count=req.gate_count
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        payload = course.to_dict()
+        identity_payload = {
+            "mode": course.mode.value,
+            "seed": course.seed,
+            "gate_count": len(course.gates),
+            "volume": payload["volume"],
+        }
+        identity_hash = hashlib.sha256(
+            json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+        course_id = f"{course.mode.value.lower()}-{course.seed}-{identity_hash}"
+        detail = CourseDetailModel(
+            id=course_id,
+            seed=course.seed,
+            mode=course.mode.value,
+            safe_volume=payload["volume"],
+            path=payload["path"],
+            gates=payload["gates"],
+            difficulty=dict(course.difficulty),
+        )
+        intelligence.courses[course_id] = detail
+        db.save_course(detail.model_dump(mode="json"))
+        return detail
+
+    @app.get("/api/courses/{course_id}", response_model=CourseDetailModel)
+    async def course_details(course_id: str) -> CourseDetailModel:
+        result = intelligence.courses.get(course_id)
+        if result is None:
+            stored = db.get_course(course_id)
+            if stored is None:
+                raise HTTPException(status_code=404, detail="course not found")
+            result = CourseDetailModel.model_validate(stored)
+            intelligence.courses[course_id] = result
+        return result
+
+    @app.get(
+        "/api/courses/{course_id}/validation", response_model=CourseValidationModel
+    )
+    async def validate_course(course_id: str) -> CourseValidationModel:
+        result = intelligence.courses.get(course_id)
+        if result is None:
+            stored = db.get_course(course_id)
+            if stored is None:
+                raise HTTPException(status_code=404, detail="course not found")
+            result = CourseDetailModel.model_validate(stored)
+            intelligence.courses[course_id] = result
+        from .course_lab import Course
+
+        payload = result.model_dump(mode="json")
+        course = Course.from_dict(
+            {
+                "mode": payload["mode"],
+                "seed": payload["seed"],
+                "volume": payload["safe_volume"],
+                "path": payload["path"],
+                "gates": payload["gates"],
+                "difficulty": payload["difficulty"],
+            }
+        )
+        report = CourseValidator().validate(course)
+        return CourseValidationModel(
+            course_id=course_id,
+            valid=report.valid,
+            errors=list(report.errors),
+        )
+
+    # -- V0.9 runtime/performance/autonomy -----------------------------------
+    @app.get("/api/runtime/status")
+    async def runtime_status() -> dict:
+        return supervisor.to_dict()
+
+    @app.get("/api/runtime/performance")
+    async def runtime_performance() -> dict:
+        return perf_manager.state.to_dict()
+
+    @app.get("/api/runtime/hardware")
+    async def runtime_hardware() -> dict:
+        return hw_profiler.profile().to_dict()
+
+    @app.get("/api/autonomy/status")
+    async def autonomy_status() -> dict:
+        return autonomy_loop.to_dict()
+
+    @app.get("/api/twin/snapshot")
+    async def twin_snapshot() -> dict:
+        return _twin_snapshot["ref"].to_dict()
+
+    # -- Mission architecture --------------------------------------------------
+    class CreateMissionRequest(BaseModel):
+        mission_type: str = "RACE"
+        description: str = ""
+        waypoints: list[dict] = []
+        search_area: list[list[float]] = []
+        delivery_target: list[float] | None = None
+        return_home: bool = True
+        max_duration_s: float = 600.0
+
+    @app.post("/api/missions")
+    async def create_mission(req: CreateMissionRequest) -> dict:
+        try:
+            mtype = MissionType(req.mission_type)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid mission_type '{req.mission_type}'; valid: {[m.value for m in MissionType]}",
+            )
+        wps = tuple(
+            Waypoint(
+                x=w.get("x", 0), y=w.get("y", 0), z=w.get("z", 5),
+                speed_m_s=w.get("speed_m_s", 5.0),
+                heading_deg=w.get("heading_deg"),
+                hold_s=w.get("hold_s", 0),
+                label=w.get("label", ""),
+            )
+            for w in req.waypoints
+        )
+        area = tuple(tuple(float(v) for v in pt) for pt in req.search_area if len(pt) >= 3)
+        target = tuple(float(v) for v in req.delivery_target) if req.delivery_target and len(req.delivery_target) >= 3 else None
+        goal = MissionGoal(
+            description=req.description,
+            waypoints=wps,
+            search_area=area,
+            delivery_target=target,
+            return_home=req.return_home,
+            max_duration_s=req.max_duration_s,
+        )
+        spec = mission_registry.create_mission(mtype, goal)
+        db.save_mission(
+            spec.mission_id,
+            mtype.value,
+            goal.to_dict(),
+            waypoints=[w.to_dict() for w in wps],
+        )
+        return spec.to_dict()
+
+    @app.get("/api/missions")
+    async def list_missions() -> dict:
+        return {"missions": mission_registry.list_missions()}
+
+    @app.get("/api/missions/{mission_id}")
+    async def get_mission(mission_id: str) -> dict:
+        spec = mission_registry.get(mission_id)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="mission not found")
+        return spec.to_dict()
+
+    @app.post("/api/missions/{mission_id}/start")
+    async def start_mission(mission_id: str) -> dict:
+        _require_command_mode()
+        try:
+            spec = mission_registry.start(mission_id)
+            db.update_mission_status(mission_id, "ACTIVE", phase="EXECUTE")
+            db.record_mission_event(mission_id, "started", phase="EXECUTE")
+            return spec.to_dict()
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/missions/{mission_id}/abort")
+    async def abort_mission(mission_id: str) -> dict:
+        try:
+            spec = mission_registry.abort(mission_id)
+            db.update_mission_status(mission_id, "ABORTED", phase="ABORT")
+            db.record_mission_event(mission_id, "aborted", phase="ABORT")
+            return spec.to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/missions/{mission_id}/events")
+    async def get_mission_events(mission_id: str) -> dict:
+        spec = mission_registry.get(mission_id)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="mission not found")
+        return {"events": db.get_mission_events(mission_id)}
+
+    # -- V0.9 hardware mode / preflight ----------------------------------------
+    @app.get("/api/hardware-mode")
+    async def hardware_mode() -> dict:
+        return hw_mode_manager.to_dict()
+
+    @app.post("/api/hardware-mode/transition")
+    async def hardware_mode_transition(req: HardwareModeTransitionRequest) -> dict:
+        try:
+            target = HardwareMode(req.target)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid mode '{req.target}'; valid: {[m.value for m in HardwareMode]}",
+            )
+        try:
+            hw_mode_manager.transition(target, req.reason)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return hw_mode_manager.to_dict()
+
+    @app.get("/api/preflight")
+    async def preflight() -> dict:
+        telemetry_snap = controller.sample()
+        report = preflight_checker.check(
+            connected=telemetry_snap.connected,
+            armed=telemetry_snap.armed,
+            battery_pct=telemetry_snap.battery_percentage,
+            adapter_name=(
+                connection_manager.active.name if connection_manager.active else None
+            ),
+            is_simulated=hw_mode_manager.is_simulation,
+            camera_available=intelligence.vision_status.running,
+            gps_fix=False,
+        )
+        return report.to_dict()
+
+    @app.get("/api/environment")
+    async def environment_check() -> dict:
+        import platform
+        import shutil
+        import sys
+
+        checks: dict[str, dict] = {}
+
+        checks["python"] = {
+            "version": sys.version,
+            "ok": sys.version_info >= (3, 11),
+        }
+
+        for pkg_name, import_name in [
+            ("numpy", "numpy"),
+            ("opencv", "cv2"),
+            ("scipy", "scipy"),
+            ("fastapi", "fastapi"),
+            ("uvicorn", "uvicorn"),
+        ]:
+            try:
+                mod = __import__(import_name)
+                ver = getattr(mod, "__version__", "unknown")
+                checks[pkg_name] = {"version": ver, "ok": True}
+            except ImportError:
+                checks[pkg_name] = {"version": None, "ok": False}
+
+        checks["platform"] = {
+            "system": platform.system(),
+            "machine": platform.machine(),
+            "ok": True,
+        }
+
+        for tool in ["ffmpeg", "gazebo"]:
+            found = shutil.which(tool) is not None
+            checks[tool] = {"available": found, "ok": True}
+
+        all_ok = all(c["ok"] for c in checks.values())
+        return {"ok": all_ok, "checks": checks}
+
+    # -- V0.9 training engine -------------------------------------------------
+    @app.get("/api/training/campaigns", response_model=list[TrainingCampaignModel])
+    async def list_campaigns() -> list[dict]:
+        return training_engine.list_campaigns()
+
+    @app.post("/api/training/campaigns", response_model=TrainingCampaignModel)
+    async def create_campaign(req: TrainingCampaignRequest) -> dict:
+        config = CampaignConfig(
+            name=req.name,
+            description=req.description,
+            course_modes=req.course_modes,
+            seed_range=req.seed_range,
+            gate_counts=req.gate_counts,
+            difficulty_tiers=req.difficulty_tiers,
+            fault_profiles=req.fault_profiles,
+            max_time_per_run_s=req.max_time_per_run_s,
+            max_runs=req.max_runs,
+            stop_on_failure=req.stop_on_failure,
+        )
+        cid = training_engine.create_campaign(config)
+        return training_engine.list_campaigns()[-1]
+
+    @app.post("/api/training/campaigns/{campaign_id}/start")
+    async def start_campaign(campaign_id: str) -> dict:
+        try:
+            training_engine.start_campaign(campaign_id)
+            return {"campaign_id": campaign_id, "status": "started"}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/training/campaigns/{campaign_id}/pause")
+    async def pause_campaign(campaign_id: str) -> dict:
+        try:
+            training_engine.pause_campaign(campaign_id)
+            return {"campaign_id": campaign_id, "status": "paused"}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/training/campaigns/{campaign_id}/cancel")
+    async def cancel_campaign(campaign_id: str) -> dict:
+        try:
+            training_engine.cancel_campaign(campaign_id)
+            return {"campaign_id": campaign_id, "status": "cancelled"}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/training/campaigns/{campaign_id}/summary")
+    async def campaign_summary(campaign_id: str) -> dict:
+        try:
+            return training_engine.get_summary(campaign_id).to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/training/campaigns/{campaign_id}/analysis")
+    async def campaign_analysis(campaign_id: str) -> dict:
+        try:
+            return training_engine.get_analysis(campaign_id).to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/training/campaigns/{campaign_id}/run-next")
+    async def run_next(campaign_id: str) -> dict:
+        try:
+            result = training_engine.execute_next_run(campaign_id)
+            if result is None:
+                return {"status": "complete", "campaign_id": campaign_id}
+            return result.to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/training/auto-curriculum")
+    async def auto_curriculum(req: AutoCurriculumRequest) -> dict:
+        tiers = [DifficultyTier(t) for t in req.tiers] if req.tiers else None
+        config = CurriculumBuilder().auto_curriculum(
+            tiers=tiers,
+            seeds_per_tier=req.seeds_per_tier,
+            gate_counts_per_tier=req.gate_counts_per_tier,
+        )
+        return config.to_dict()
+
+    @app.get("/api/training/fault-profiles")
+    async def fault_profiles() -> dict:
+        from .training import FAULT_PROFILES
+        return {
+            name: profile.to_dict()
+            for name, profile in FAULT_PROFILES.items()
+        }
+
+    # -- V0.9 replay system ---------------------------------------------------
+    @app.get("/api/replay/flights")
+    async def replay_flights() -> dict:
+        flights = replay_loader.list_flights()
+        return {"flights": [f.to_dict() for f in flights]}
+
+    @app.post("/api/replay/load/{flight_id}")
+    async def replay_load(flight_id: int) -> dict:
+        try:
+            timeline = replay_loader.load_timeline(flight_id)
+            replay_player.load(timeline)
+            return {
+                "status": "loaded",
+                "timeline": timeline.to_dict(),
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/replay/status")
+    async def replay_status() -> dict:
+        return replay_player.to_dict()
+
+    @app.post("/api/replay/play")
+    async def replay_play() -> dict:
+        replay_player.play()
+        return replay_player.to_dict()
+
+    @app.post("/api/replay/pause")
+    async def replay_pause() -> dict:
+        replay_player.pause()
+        return replay_player.to_dict()
+
+    @app.post("/api/replay/stop")
+    async def replay_stop() -> dict:
+        replay_player.stop()
+        return replay_player.to_dict()
+
+    class ReplaySeekRequest(BaseModel):
+        time_offset: float = 0.0
+
+    @app.post("/api/replay/seek")
+    async def replay_seek(req: ReplaySeekRequest) -> dict:
+        replay_player.seek(req.time_offset)
+        return replay_player.to_dict()
+
+    class ReplaySpeedRequest(BaseModel):
+        speed: float = 1.0
+
+    @app.post("/api/replay/speed")
+    async def replay_speed(req: ReplaySpeedRequest) -> dict:
+        replay_player.set_speed(req.speed)
+        return replay_player.to_dict()
+
+    @app.get("/api/replay/frame")
+    async def replay_frame() -> dict:
+        frame = replay_player.current_frame()
+        if frame is None:
+            return {"frame": None}
+        return {"frame": frame.to_dict()}
+
+    @app.post("/api/replay/tick")
+    async def replay_tick() -> dict:
+        frames = replay_player.tick()
+        return {
+            "status": replay_player.to_dict(),
+            "frames": [f.to_dict() for f in frames],
         }
 
     # -- WebSocket ----------------------------------------------------------

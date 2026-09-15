@@ -14,8 +14,23 @@ import DigitalTwin from "./components/DigitalTwin";
 import DiagnosticsPanel from "./components/DiagnosticsPanel";
 import RunSummaryCard from "./components/RunSummaryCard";
 import SimulationLab from "./pages/SimulationLab";
+import VisionPage from "./pages/VisionPage";
+import PerformancePage from "./pages/PerformancePage";
+import ReplayPage from "./pages/ReplayPage";
+import TrainingPage from "./pages/TrainingPage";
+import HopperSetupPage from "./pages/HopperSetupPage";
+import MissionPage from "./pages/MissionPage";
+import TwinPage from "./pages/TwinPage";
+import ForgePage from "./pages/ForgePage";
+import EvolutionPage from "./pages/EvolutionPage";
 
 const AIRBORNE_EPS = 0.15;
+type AvailabilityTelemetry = Telemetry & {
+  battery_available?: boolean;
+  altitude_available?: boolean;
+  velocity_available?: boolean;
+  position_available?: boolean;
+};
 
 function FlightDashboard() {
   const [telemetry, setTelemetry] = useState<Telemetry>(DISCONNECTED);
@@ -42,7 +57,7 @@ function FlightDashboard() {
         if (!frame.data.connected) setTwin(null);
       } else if (frame.type === "twin") {
         setTwin(frame.data);
-      } else {
+      } else if (frame.type === "event") {
         pushEvent(frame.data);
       }
     }, setStreamOnline);
@@ -82,96 +97,63 @@ function FlightDashboard() {
     return result;
   };
 
+  const t = telemetry as AvailabilityTelemetry;
   const connected = telemetry.connected;
   const armed = telemetry.armed;
-  const airborne = connected && telemetry.altitude > AIRBORNE_EPS;
+  const altitudeKnown = t.altitude_available !== false;
+  const batteryKnown = t.battery_available !== false;
+  const velocityKnown = t.velocity_available !== false;
+  const positionKnown = t.position_available !== false;
+  const airborne = connected && altitudeKnown && telemetry.altitude > AIRBORNE_EPS;
 
   return (
     <>
       <section className="top-bar">
-        <AdapterSelector
-          selected={adapter}
-          onSelect={setAdapter}
-          disabled={connected}
-        />
-        <button
-          className="diag-toggle"
-          onClick={() => setShowDiag(!showDiag)}
-        >
+        <AdapterSelector selected={adapter} onSelect={setAdapter} disabled={connected} />
+        <button className="diag-toggle" onClick={() => setShowDiag(!showDiag)}>
           {showDiag ? "Hide Diagnostics" : "Diagnostics"}
         </button>
       </section>
 
       {showDiag && <DiagnosticsPanel wsConnected={streamOnline} />}
-
-      {runSummary && (
-        <RunSummaryCard summary={runSummary} onDismiss={() => setRunSummary(null)} />
-      )}
+      {runSummary && <RunSummaryCard summary={runSummary} onDismiss={() => setRunSummary(null)} />}
 
       <section className="status-card">
         <div className="aircraft-line">
           <span className="label">Aircraft</span>
-          {connected ? (
-            <span className="badge connected">CONNECTED</span>
-          ) : (
-            <span className="badge disconnected">
-              {streamOnline ? "SEARCHING FOR AIRCRAFT" : "DISCONNECTED"}
-            </span>
+          {connected ? <span className="badge connected">CONNECTED</span> : (
+            <span className="badge disconnected">{streamOnline ? "SEARCHING FOR AIRCRAFT" : "DISCONNECTED"}</span>
           )}
           <span className="quality-badge">{telemetry.connection_quality}</span>
         </div>
 
         <div className="metrics">
-          <Metric label="Battery" value={`${telemetry.battery_percentage.toFixed(1)}%`} warn={telemetry.battery_percentage < 20} />
-          <Metric label="Altitude" value={`${telemetry.altitude.toFixed(2)} m`} />
-          <Metric label="Speed" value={`${telemetry.velocity.toFixed(2)} m/s`} />
-          <Metric
-            label="Position"
-            value={`${telemetry.x.toFixed(1)}, ${telemetry.y.toFixed(1)}, ${telemetry.z.toFixed(1)}`}
-          />
+          <Metric label="Battery" value={batteryKnown ? `${telemetry.battery_percentage.toFixed(1)}%` : "UNKNOWN"} warn={batteryKnown && telemetry.battery_percentage < 20} />
+          <Metric label="Altitude" value={altitudeKnown ? `${telemetry.altitude.toFixed(2)} m` : "UNKNOWN"} />
+          <Metric label="Speed" value={velocityKnown ? `${telemetry.velocity.toFixed(2)} m/s` : "UNKNOWN"} />
+          <Metric label="Position" value={positionKnown ? `${telemetry.x.toFixed(1)}, ${telemetry.y.toFixed(1)}, ${telemetry.z.toFixed(1)}` : "UNKNOWN"} />
           <Metric label="Flight Mode" value={telemetry.flight_mode} />
           <Metric label="State" value={armed ? "ARMED" : "DISARMED"} />
         </div>
       </section>
 
       <section className="controls">
-        <button
-          className={connected ? "btn danger" : "btn primary"}
-          disabled={busy}
-          onClick={() => run(connected ? handleDisconnect : handleConnect)}
-        >
+        <button className={connected ? "btn danger" : "btn primary"} disabled={busy} onClick={() => run(connected ? handleDisconnect : handleConnect)}>
           {connected ? "DISCONNECT" : "CONNECT"}
         </button>
-        <button
-          className="btn"
-          disabled={busy || !connected || airborne}
-          onClick={() => run(armed ? api.disarm : api.arm)}
-        >
+        <button className="btn" disabled={busy || !connected || airborne} onClick={() => run(armed ? api.disarm : api.arm)}>
           {armed ? "DISARM" : "ARM"}
         </button>
-        <button
-          className="btn"
-          disabled={busy || !connected || !armed || airborne}
-          onClick={() => run(() => api.takeoff(5))}
-        >
-          TAKEOFF
-        </button>
-        <button className="btn" disabled={busy || !airborne} onClick={() => run(api.hold)}>
-          HOLD
-        </button>
-        <button className="btn" disabled={busy || !airborne} onClick={() => run(api.land)}>
-          LAND
-        </button>
+        <button className="btn" disabled={busy || !connected || !armed || airborne} onClick={() => run(() => api.takeoff(5))}>TAKEOFF</button>
+        <button className="btn" disabled={busy || !airborne} onClick={() => run(api.hold)}>HOLD</button>
+        <button className="btn" disabled={busy || !airborne} onClick={() => run(api.land)}>LAND</button>
       </section>
 
       <div className="twin-events-layout">
         <DigitalTwin twin={twin} />
-
         <section className="timeline">
           <h2>Event Timeline</h2>
-          {events.length === 0 ? (
-            <p className="empty">No events yet.</p>
-          ) : (
+          {events.length === 0 ? <p className="empty">No events yet.</p> : (
             <ul>
               {events.map((ev, i) => (
                 <li key={i} className={`ev ${ev.event_type}`}>
@@ -196,17 +178,44 @@ export default function App() {
           <span className="logo">&#9650;</span> VantaFlight
           <nav className="nav-links">
             <NavLink to="/" end>Control</NavLink>
+            <NavLink to="/mission">Mission</NavLink>
+            <NavLink to="/twin">Twin</NavLink>
+            <NavLink to="/forge">VantaForge</NavLink>
+            <NavLink to="/hopper">Hopper</NavLink>
+            <NavLink to="/vision">Vision</NavLink>
             <NavLink to="/sim">Sim Lab</NavLink>
+            <NavLink to="/training">Training</NavLink>
+            <NavLink to="/evolution">Evolution</NavLink>
+            <NavLink to="/performance">Performance</NavLink>
+            <NavLink to="/replay">Replay</NavLink>
           </nav>
         </header>
 
         <Routes>
           <Route path="/" element={<FlightDashboard />} />
+          <Route path="/mission" element={<MissionPage />} />
+          <Route path="/twin" element={<TwinPage />} />
+          <Route path="/forge" element={<ForgePage />} />
+          <Route path="/hopper" element={<HopperSetupPage />} />
+          <Route path="/vision" element={<VisionWrapper />} />
           <Route path="/sim" element={<SimLabWrapper />} />
+          <Route path="/training" element={<TrainingPage />} />
+          <Route path="/evolution" element={<EvolutionPage />} />
+          <Route path="/performance" element={<PerformancePage />} />
+          <Route path="/replay" element={<ReplayPage />} />
         </Routes>
       </div>
     </BrowserRouter>
   );
+}
+
+function VisionWrapper() {
+  const [wsOnline, setWsOnline] = useState(false);
+  useEffect(() => {
+    const unsub = openTelemetryStream(() => {}, setWsOnline);
+    return unsub;
+  }, []);
+  return <VisionPage wsConnected={wsOnline} />;
 }
 
 function SimLabWrapper() {

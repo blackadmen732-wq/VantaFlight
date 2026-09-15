@@ -1,10 +1,14 @@
-# VantaFlight Architecture (V0.3)
+# VantaFlight Architecture (V0.5)
 
 ## Overview
 
 VantaFlight is a local-first drone simulation and control platform. It runs
 entirely on one machine with no cloud dependency. The system connects to
 either a built-in mock adapter or a PX4 SITL instance via MAVLink.
+
+V0.5 preserves the V0.3 Flight Core and adds backend-intelligence packages
+around it. Perception and planning consume normalized models and never bypass
+the adapter, safety, or PX4 stabilization boundaries.
 
 ## System Layers
 
@@ -29,9 +33,37 @@ either a built-in mock adapter or a PX4 SITL instance via MAVLink.
 │  (state, trajectory, session)        │
 ├──────────────────────────────────────┤
 │       SQLite (WAL mode)              │
-│  (flights, telemetry, events)        │
+│  (flights, courses, runs, metrics)   │
 └──────────────────────────────────────┘
 ```
+
+## V0.5 Intelligence Pipeline
+
+```
+CameraManager ─┬─ latest FramePacket → VantaFrame → VantaDetect → VantaPose
+               │                                      ↓
+               │                              VantaTrack + optical flow
+               │                                      ↓
+               │  normalized aircraft state → VantaFusion
+               │                                      ↓
+               │                         VantaScene → VantaPredict
+               │                                      ↓
+               │                              VantaRace planner
+               │                                      ↓
+               │                         DesiredTrajectoryState
+               │                                      ↓
+               │                          simulation-only PX4 boundary
+               │
+               └─ lower-priority preview boundary (transport deferred)
+
+Digital Twin truth ── validation/analyzer only; never perception input
+CourseLab ── seeded path-first courses, gates, difficulty and experiments
+AsyncRecorder ── bounded queue and batched SQLite writes
+```
+
+Vision modules have no MAVSDK dependency. Racing modules have no OpenCV
+dependency. `DesiredTrajectoryState` contains position, velocity,
+acceleration, and yaw setpoints—not motor or PWM commands.
 
 ## Key Design Decisions
 
@@ -69,6 +101,9 @@ backend/
     core/             # FlightController, safety
     data/             # SQLite database
     digital_twin/     # Twin state, trajectory, session
+    vision/           # VantaSight capture-to-prediction pipeline
+    racing/           # VantaRace state, trajectory, speed planning
+    course_lab/        # VantaForge generation, analysis, experiments
     mavlink/          # MAVSDKClient wrapper
     models/           # Telemetry, FlightMode, etc.
     config.py         # Central configuration
