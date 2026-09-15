@@ -142,7 +142,10 @@ class HopperAdapter(DroneAdapter):
     def get_capabilities(self) -> Capabilities:
         self._refresh_capabilities()
         cap_map = self._effective_capability_map()
-        supported = [k for k, v in cap_map.items() if v == CapabilityStatus.SUPPORTED]
+        # `supported_capabilities` describes adapter-level support and remains
+        # useful during discovery. `capability_map` describes whether each
+        # capability is available on the *current links right now*.
+        supported = self._caps.supported_list()
         return Capabilities(
             name="FTW Robotics Hopper",
             adapter_type="hopper",
