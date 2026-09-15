@@ -1,17 +1,4 @@
-"""FTW Robotics Hopper adapter package.
-
-Public surface:
-  HopperAdapter           — main facade; implements DroneAdapter
-  HopperConfig            — top-level configuration dataclass
-  HopperConnectionState   — multi-link connection state enum
-  HopperOperatingMode     — OBSERVE / PROGRAM_UPLOAD / LIVE_CONTROL
-  HopperCapabilities      — per-capability availability
-  HopperHealth            — per-link health snapshot
-  SimpleMissionPlan       — thin mission plan type accepted by the compiler
-  Errors:  HopperNotFound, HopperUnsupportedCapability, HopperBatteryCritical, …
-
-Nothing outside this package should import from sub-modules directly.
-"""
+"""FTW Robotics Hopper adapter package."""
 from .adapter import HopperAdapter
 from .capabilities import HopperCapabilities
 from .config import HopperConfig
@@ -35,6 +22,7 @@ from .models import (
     HopperOperatingMode,
 )
 from .programs import SimpleMissionPlan
+from .vision_source import HopperVisionCameraSource
 
 __all__ = [
     "HopperAdapter",
@@ -43,9 +31,9 @@ __all__ = [
     "HopperConnectionState",
     "HopperHealth",
     "HopperOperatingMode",
+    "HopperVisionCameraSource",
     "BatteryState",
     "SimpleMissionPlan",
-    # errors
     "HopperError",
     "HopperNotFound",
     "HopperUnsupportedCapability",

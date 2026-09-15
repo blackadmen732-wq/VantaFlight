@@ -28,12 +28,22 @@ import type {
   WsFrame,
 } from "./types";
 
+async function parseError(res: Response): Promise<Error> {
+  try {
+    const body = await res.json() as { detail?: string; message?: string };
+    return new Error(body.detail ?? body.message ?? `request failed: ${res.status}`);
+  } catch {
+    return new Error(`request failed: ${res.status}`);
+  }
+}
+
 async function post(path: string, body?: unknown): Promise<CommandResult> {
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (!res.ok) throw await parseError(res);
   return (await res.json()) as CommandResult;
 }
 
@@ -43,13 +53,13 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`request failed: ${res.status}`);
+  if (!res.ok) throw await parseError(res);
   return (await res.json()) as T;
 }
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
-  if (!res.ok) throw new Error(`request failed: ${res.status}`);
+  if (!res.ok) throw await parseError(res);
   return (await res.json()) as T;
 }
 
@@ -102,7 +112,10 @@ export const api = {
   campaignAnalysis: (id: string) =>
     get<CampaignAnalysis>(`/api/training/campaigns/${encodeURIComponent(id)}/analysis`),
   runNextTraining: (id: string) =>
-    postJson<TrainingRunResult>(`/api/training/campaigns/${encodeURIComponent(id)}/run-next`, {}),
+    postJson<TrainingRunResult | { status: string; campaign_id: string }>(
+      `/api/training/campaigns/${encodeURIComponent(id)}/run-next`,
+      {},
+    ),
   autoCurriculum: (config: Record<string, unknown>) =>
     postJson<Record<string, unknown>>("/api/training/auto-curriculum", config),
   faultProfiles: () => get<Record<string, FaultProfileInfo>>("/api/training/fault-profiles"),
