@@ -12,7 +12,13 @@ from ..models import CommandResult, FlightEvent, Telemetry
 from ..safety import SafetyValidator
 from ..config import SOFTWARE_VERSION
 
-_DISCONNECTED = Telemetry(connected=False)
+_DISCONNECTED = Telemetry(
+    connected=False,
+    battery_available=False,
+    altitude_available=False,
+    velocity_available=False,
+    position_available=False,
+)
 
 _ADAPTER_COMMANDS = {"arm", "disarm", "takeoff", "hold", "land"}
 
@@ -49,7 +55,6 @@ class FlightController:
         self._metrics = _Metrics()
         self._connect_lock = asyncio.Lock()
 
-    # -- lifecycle ----------------------------------------------------------
     async def connect(self, target=None) -> CommandResult:
         async with self._connect_lock:
             return await self._connect_inner(target)
@@ -71,7 +76,8 @@ class FlightController:
         transport = active.transport.value if active else "SIMULATED"
 
         self._flight_id = self._db.start_flight(
-            drone_id, caps.name,
+            drone_id,
+            caps.name,
             adapter_type=adapter_type,
             is_simulated=is_simulated,
             connection_type=transport,
@@ -80,7 +86,8 @@ class FlightController:
         self._session_state = SessionState.CONNECTED
         self._connection_loss_logged = False
         telemetry = adapter.get_telemetry()
-        self._twin.start(battery=telemetry.battery_percentage)
+        battery = telemetry.battery_percentage if telemetry.battery_available else 0.0
+        self._twin.start(battery=battery)
         self._log_event("connected", f"connected to {caps.name}")
         return CommandResult(command="connect", accepted=True, message=f"connected to {caps.name}")
 
@@ -100,7 +107,6 @@ class FlightController:
             self._end_flight("completed")
             return CommandResult(command="disconnect", accepted=True, message="disconnected")
 
-    # -- commands -----------------------------------------------------------
     async def command(self, name: str, **kwargs) -> CommandResult:
         if name == "connect":
             return await self.connect()
@@ -118,7 +124,7 @@ class FlightController:
         telemetry = self.get_telemetry()
         violation = self._safety.check(name, telemetry)
         if violation is not None:
-            result = CommandResult(command=name, accepted=False, message=violation.reason)
+            result = CommandResult.rejected(name, violation.reason)
             self._record_command(result)
             self._log_event("rejected", f"{name} rejected: {violation.reason}")
             return result
@@ -127,7 +133,7 @@ class FlightController:
         assert adapter is not None
         try:
             method = getattr(adapter, name)
-            await method(**kwargs)
+            adapter_result = await method(**kwargs)
         except Exception as exc:
             result = CommandResult(command=name, accepted=False, message=f"drone error: {exc}")
             self._record_command(result)
@@ -137,16 +143,28 @@ class FlightController:
         cmd_time = time.monotonic() - t_start
         self._metrics.record_command_rtt(cmd_time)
 
+        # Newer physical adapters return a typed transport outcome. Preserve it
+        # exactly so a command that never left this process can never be turned
+        # into a generic "accepted" success by FlightController.
+        if isinstance(adapter_result, CommandResult):
+            result = adapter_result
+            if not result.accepted or not result.status.transmitted:
+                self._record_command(result)
+                event = "rejected" if not result.accepted else "not_sent"
+                self._log_event(event, f"{name}: {result.message or result.status.value}")
+                return result
+        else:
+            # Legacy Mock/PX4 adapters complete the method only after dispatch.
+            result = CommandResult.ok(name, "accepted")
+
         if self._session_state == SessionState.CONNECTED and name in ("arm", "takeoff"):
             self._session_state = SessionState.ACTIVE
 
         self._twin.record_command()
-        result = CommandResult(command=name, accepted=True, message="accepted")
         self._record_command(result)
-        self._log_event(name, f"{name} accepted")
+        self._log_event(name, f"{name} {result.status.value.lower()}")
         return result
 
-    # -- telemetry ----------------------------------------------------------
     def get_telemetry(self) -> Telemetry:
         adapter = self._connections.adapter
         if adapter is None:
@@ -183,7 +201,6 @@ class FlightController:
             self._twin.update(telemetry)
         return telemetry
 
-    # -- helpers ------------------------------------------------------------
     @property
     def flight_id(self) -> int | None:
         return self._flight_id
@@ -202,7 +219,7 @@ class FlightController:
         return self._twin
 
     @property
-    def metrics(self) -> _Metrics:
+    def metrics(self) -> "_Metrics":
         return self._metrics
 
     def drain_events(self) -> list[FlightEvent]:
