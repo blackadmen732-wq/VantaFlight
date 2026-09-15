@@ -49,6 +49,15 @@ class Telemetry(BaseModel):
         return self.connected and self.altitude > 0.15
 
 
+class CapabilityStatus(str, Enum):
+    """Per-capability availability reported by a vehicle adapter."""
+    SUPPORTED = "SUPPORTED"
+    UNSUPPORTED = "UNSUPPORTED"
+    UNAVAILABLE = "UNAVAILABLE"
+    UNKNOWN = "UNKNOWN"
+    DEGRADED = "DEGRADED"
+
+
 class Capabilities(BaseModel):
     name: str
     adapter_type: str = "unknown"
@@ -65,6 +74,8 @@ class Capabilities(BaseModel):
     is_simulated: bool = True
     max_altitude_m: float = 120.0
     supported_capabilities: list[str] = Field(default_factory=list)
+    # Fine-grained capability map; adapters that support it populate this.
+    capability_map: dict[str, CapabilityStatus] = Field(default_factory=dict)
 
 
 class CommandResult(BaseModel):
@@ -83,3 +94,13 @@ class FlightEvent(BaseModel):
 class AdapterType(str, Enum):
     MOCK = "mock"
     PX4_SITL = "px4_sitl"
+    HOPPER = "hopper"
+
+
+class TelemetrySource(str, Enum):
+    """Where a telemetry value came from — preserved for Digital Twin and Replay."""
+    HOPPER_NATIVE = "HOPPER_NATIVE"
+    VANTASTATE_ESTIMATED = "VANTASTATE_ESTIMATED"
+    CAMERA_DERIVED = "CAMERA_DERIVED"
+    SIMULATED = "SIMULATED"
+    UNAVAILABLE = "UNAVAILABLE"

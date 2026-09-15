@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from ..adapters import DroneAdapter, MockDroneAdapter, PX4SITLAdapter
+from ..adapters import DroneAdapter, HopperAdapter, MockDroneAdapter, PX4SITLAdapter
+from ..adapters.hopper import HopperConfig
 from ..config import PX4_SITL_URL
 from ..mavlink import MAVLinkConfig
 from ..models import AdapterType
@@ -18,6 +19,8 @@ class TransportType(str, Enum):
     RADIO = "RADIO"
     UDP = "UDP"
     TCP = "TCP"
+    HOPPER_WIFI = "HOPPER_WIFI"
+    HOPPER_BLE = "HOPPER_BLE"
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,13 @@ _BUILTIN_SOURCES = [
         address=PX4_SITL_URL,
         adapter_type=AdapterType.PX4_SITL,
     ),
+    DiscoveredDrone(
+        drone_id="hopper-0",
+        name="FTW Robotics Hopper",
+        transport=TransportType.HOPPER_WIFI,
+        address="http://192.168.2.1",
+        adapter_type=AdapterType.HOPPER,
+    ),
 ]
 
 
@@ -69,6 +79,14 @@ class ConnectionManager:
         if drone.adapter_type == AdapterType.PX4_SITL or drone.transport == TransportType.PX4_SITL:
             cfg = MAVLinkConfig(system_address=drone.address)
             return PX4SITLAdapter(adapter_id=drone.drone_id, config=cfg)
+        if drone.adapter_type == AdapterType.HOPPER or drone.transport in (
+            TransportType.HOPPER_WIFI,
+            TransportType.HOPPER_BLE,
+        ):
+            from ..adapters.hopper.config import HopperCameraConfig
+            cfg = HopperConfig(adapter_id=drone.drone_id)
+            cfg.camera.base_url = drone.address
+            return HopperAdapter(config=cfg)
         raise NotImplementedError(
             f"transport {drone.transport.value} is not supported yet"
         )
