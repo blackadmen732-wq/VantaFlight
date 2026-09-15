@@ -19,6 +19,10 @@ import PerformancePage from "./pages/PerformancePage";
 import ReplayPage from "./pages/ReplayPage";
 import TrainingPage from "./pages/TrainingPage";
 import HopperSetupPage from "./pages/HopperSetupPage";
+import MissionPage from "./pages/MissionPage";
+import TwinPage from "./pages/TwinPage";
+import ForgePage from "./pages/ForgePage";
+import EvolutionPage from "./pages/EvolutionPage";
 
 const AIRBORNE_EPS = 0.15;
 type AvailabilityTelemetry = Telemetry & {
@@ -174,22 +178,30 @@ export default function App() {
           <span className="logo">&#9650;</span> VantaFlight
           <nav className="nav-links">
             <NavLink to="/" end>Control</NavLink>
+            <NavLink to="/mission">Mission</NavLink>
+            <NavLink to="/twin">Twin</NavLink>
+            <NavLink to="/forge">VantaForge</NavLink>
             <NavLink to="/hopper">Hopper</NavLink>
             <NavLink to="/vision">Vision</NavLink>
             <NavLink to="/sim">Sim Lab</NavLink>
-            <NavLink to="/performance">Performance</NavLink>
             <NavLink to="/training">Training</NavLink>
+            <NavLink to="/evolution">Evolution</NavLink>
+            <NavLink to="/performance">Performance</NavLink>
             <NavLink to="/replay">Replay</NavLink>
           </nav>
         </header>
 
         <Routes>
           <Route path="/" element={<FlightDashboard />} />
+          <Route path="/mission" element={<MissionPage />} />
+          <Route path="/twin" element={<TwinPage />} />
+          <Route path="/forge" element={<ForgePage />} />
           <Route path="/hopper" element={<HopperSetupPage />} />
           <Route path="/vision" element={<VisionWrapper />} />
           <Route path="/sim" element={<SimLabWrapper />} />
-          <Route path="/performance" element={<PerformancePage />} />
           <Route path="/training" element={<TrainingPage />} />
+          <Route path="/evolution" element={<EvolutionPage />} />
+          <Route path="/performance" element={<PerformancePage />} />
           <Route path="/replay" element={<ReplayPage />} />
         </Routes>
       </div>
