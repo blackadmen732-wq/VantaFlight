@@ -111,11 +111,12 @@ class TestCapabilities:
         assert caps.telemetry == CapabilityStatus.SUPPORTED
         assert caps.battery == CapabilityStatus.SUPPORTED
 
-    def test_program_mode_adds_program_caps(self):
+    def test_program_mode_program_caps_are_unknown_not_supported(self):
+        """program_upload/run/stop must be UNKNOWN until FTW publishes the SDK."""
         caps = program_mode_capabilities()
-        assert caps.program_upload == CapabilityStatus.SUPPORTED
-        assert caps.program_run == CapabilityStatus.SUPPORTED
-        assert caps.program_stop == CapabilityStatus.SUPPORTED
+        assert caps.program_upload == CapabilityStatus.UNKNOWN
+        assert caps.program_run == CapabilityStatus.UNKNOWN
+        assert caps.program_stop == CapabilityStatus.UNKNOWN
 
     def test_live_control_commands_remain_unknown(self):
         from vantaflight.adapters.hopper.capabilities import live_control_capabilities
@@ -127,7 +128,8 @@ class TestCapabilities:
         caps = program_mode_capabilities()
         supported = caps.supported_list()
         assert "camera" in supported
-        assert "program_upload" in supported
+        # program_upload is UNKNOWN (no transport), not SUPPORTED
+        assert "program_upload" not in supported
         assert "velocity" not in supported
         assert "arm" not in supported
 
@@ -488,15 +490,21 @@ class TestConnectionManagerHopper:
 
 
 class TestTelemetryConnector:
-    def test_empty_raw_returns_defaults(self):
+    def test_empty_raw_marks_fields_unavailable(self):
+        """Without raw data, availability flags must be False — not fake 100% battery."""
         conn = HopperTelemetryConnector()
         conn.mark_connected()
         tel = conn.get_telemetry()
         assert tel.connected
+        assert not tel.battery_available
+        assert not tel.altitude_available
+        assert not tel.velocity_available
+        assert not tel.position_available
+        # placeholder values — callers must check *_available flags before trusting these
+        assert tel.battery_percentage == 0.0
         assert tel.altitude == 0.0
-        assert tel.battery_percentage == 100.0
 
-    def test_ingest_raw_updates_fields(self):
+    def test_ingest_raw_updates_fields_and_sets_available_flags(self):
         conn = HopperTelemetryConnector()
         conn.mark_connected()
         conn.ingest({
@@ -504,11 +512,18 @@ class TestTelemetryConnector:
             "altitude_m": 1.5,
             "heading_deg": 45.0,
             "speed_mps": 0.5,
+            "x": 0.1,
+            "y": 0.2,
             "flight_mode": "HOVER",
         })
         tel = conn.get_telemetry()
         assert tel.battery_percentage == 72.0
+        assert tel.battery_available
         assert tel.altitude == 1.5
+        assert tel.altitude_available
+        assert tel.velocity == 0.5
+        assert tel.velocity_available
+        assert tel.position_available
         assert tel.heading == 45.0
 
     def test_unknown_fields_are_none_not_fabricated(self):
@@ -554,3 +569,64 @@ class TestHopperAdapterContract:
         cfg = HopperConfig(adapter_id="hopper-test-99")
         adapter = HopperAdapter(config=cfg)
         assert adapter.adapter_id == "hopper-test-99"
+
+
+# ---------------------------------------------------------------------------
+# deploy() must never fake success
+# ---------------------------------------------------------------------------
+
+
+class TestProgramDeployHonesty:
+    @pytest.mark.asyncio
+    async def test_deploy_raises_unsupported_not_true(self):
+        """deploy() must raise HopperUnsupportedCapability — never return True."""
+        adapter = _make_disconnected_adapter()
+        adapter._programs.mark_connected()
+        plan = SimpleMissionPlan(steps=[
+            {"opcode": "TAKEOFF", "altitude_m": 1.0},
+            {"opcode": "LAND"},
+        ])
+        program = adapter.compile_program(plan, mission_id="test-deploy")
+        with pytest.raises(HopperUnsupportedCapability, match="not yet available"):
+            await adapter.deploy_program(program)
+
+    @pytest.mark.asyncio
+    async def test_deploy_directly_raises(self):
+        """HopperProgramConnector.deploy() raises regardless of connected state."""
+        from vantaflight.adapters.hopper.programs import HopperProgramCompiler, HopperProgramConnector
+        connector = HopperProgramConnector()
+        connector.mark_connected()
+        compiler = HopperProgramCompiler()
+        program = compiler.compile(SimpleMissionPlan(steps=[
+            {"opcode": "TAKEOFF", "altitude_m": 1.0},
+            {"opcode": "LAND"},
+        ]))
+        with pytest.raises(HopperUnsupportedCapability):
+            await connector.deploy(program)
+
+
+# ---------------------------------------------------------------------------
+# hold() / land() return CommandResult, never void
+# ---------------------------------------------------------------------------
+
+
+class TestHoldLandCommandResult:
+    @pytest.mark.asyncio
+    async def test_hold_returns_no_transport_when_no_control_link(self):
+        from vantaflight.models import CommandStatus
+        adapter = _make_disconnected_adapter()
+        result = await adapter.hold()
+        assert result is not None
+        assert result.command == "hold"
+        assert result.status == CommandStatus.TRANSPORT_UNAVAILABLE
+        assert not result.accepted
+
+    @pytest.mark.asyncio
+    async def test_land_returns_no_transport_when_no_control_link(self):
+        from vantaflight.models import CommandStatus
+        adapter = _make_disconnected_adapter()
+        result = await adapter.land()
+        assert result is not None
+        assert result.command == "land"
+        assert result.status == CommandStatus.TRANSPORT_UNAVAILABLE
+        assert not result.accepted

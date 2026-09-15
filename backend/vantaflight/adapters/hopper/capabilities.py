@@ -112,11 +112,16 @@ def observe_mode_capabilities() -> HopperCapabilities:
 
 
 def program_mode_capabilities() -> HopperCapabilities:
-    """Capabilities when the program/Bluetooth link is also established."""
+    """Capabilities when the program/Bluetooth link is also established.
+
+    Program upload/run/stop remain UNKNOWN — the official FTW Bluetooth
+    program-upload interface has not been published yet.  Do not promote
+    these to SUPPORTED without a real, verified transport in place.
+    """
     caps = observe_mode_capabilities()
-    caps.program_upload = CapabilityStatus.SUPPORTED
-    caps.program_run = CapabilityStatus.SUPPORTED
-    caps.program_stop = CapabilityStatus.SUPPORTED
+    caps.program_upload = CapabilityStatus.UNKNOWN
+    caps.program_run = CapabilityStatus.UNKNOWN
+    caps.program_stop = CapabilityStatus.UNKNOWN
     return caps
 
 

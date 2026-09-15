@@ -172,28 +172,21 @@ class HopperProgramConnector:
         return program
 
     async def deploy(self, program: HopperMissionProgram) -> bool:
-        """Deploy a validated program.
+        """Deploy a validated program to Hopper.
 
-        Until FTW publishes the external program-upload API, this logs
-        intent and returns True so higher-level tests pass.  The real
-        transport call goes here when the SDK is available.
+        The official FTW Bluetooth program-upload interface has not been
+        published yet.  This method raises HopperUnsupportedCapability until
+        a real, verified transport exists.
+
+        DO NOT change this to return True or fake success — callers must know
+        whether the program actually reached the drone.
         """
-        if not self._connected:
-            raise HopperUnsupportedCapability(
-                "Program connector is not connected; cannot deploy."
-            )
-        # Validate again at deploy time — programs must not be mutated between
-        # compile and deploy.
-        self._validator.validate(program)
-        logger.info(
-            "HopperProgramConnector: would deploy program %s (%d instructions, "
-            "%.0f s estimated) — awaiting official FTW upload interface.",
-            program.program_id,
-            len(program.instructions),
-            program.estimated_duration_s,
+        raise HopperUnsupportedCapability(
+            "Program deployment is not yet available. "
+            "The official FTW Bluetooth program-upload interface has not been published. "
+            f"Program {program.program_id} ({len(program.instructions)} instructions, "
+            f"{program.estimated_duration_s:.0f}s estimated) was NOT deployed to Hopper."
         )
-        self._last_program = program
-        return True
 
     @property
     def last_program(self) -> Optional[HopperMissionProgram]:

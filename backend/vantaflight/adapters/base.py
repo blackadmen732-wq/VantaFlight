@@ -8,8 +8,9 @@ any future drone later means implementing this interface, nothing else.
 from __future__ import annotations
 
 import abc
+from typing import Optional
 
-from ..models import Capabilities, Telemetry
+from ..models import Capabilities, CommandResult, Telemetry
 
 
 class DroneAdapter(abc.ABC):
@@ -39,12 +40,20 @@ class DroneAdapter(abc.ABC):
         """Begin an automated takeoff to the requested altitude."""
 
     @abc.abstractmethod
-    async def hold(self) -> None:
-        """Hold current position/altitude (loiter)."""
+    async def hold(self) -> Optional[CommandResult]:
+        """Hold current position/altitude (loiter).
+
+        Returns a CommandResult when the adapter tracks command outcomes;
+        None is acceptable for adapters that do not implement result tracking.
+        """
 
     @abc.abstractmethod
-    async def land(self) -> None:
-        """Begin an automated landing."""
+    async def land(self) -> Optional[CommandResult]:
+        """Begin an automated landing.
+
+        Returns a CommandResult when the adapter tracks command outcomes;
+        None is acceptable for adapters that do not implement result tracking.
+        """
 
     @abc.abstractmethod
     def get_telemetry(self) -> Telemetry:

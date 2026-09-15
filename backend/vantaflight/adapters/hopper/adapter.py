@@ -28,7 +28,7 @@ import logging
 import time
 from typing import Optional
 
-from ...models import Capabilities, CapabilityStatus, FlightMode, Telemetry
+from ...models import Capabilities, CapabilityStatus, CommandResult, CommandStatus, FlightMode, Telemetry
 from ..base import DroneAdapter
 from .battery import HopperBatteryManager
 from .camera import HopperCameraConnector
@@ -183,25 +183,30 @@ class HopperAdapter(DroneAdapter):
         self._safety.check(cmd, self._connection_state, self._link.control_link_alive)
         await self._control.send(cmd)
 
-    async def hold(self) -> None:
-        # hold/land are always accepted — they are in _ALWAYS_ALLOWED.
+    async def hold(self) -> CommandResult:
+        # hold is always accepted by safety — it is in _ALWAYS_ALLOWED.
         cmd = HopperCommand.create("hold", ttl_s=self._config.command_ttl_s)
         self._safety.check(cmd, self._connection_state, self._link.control_link_alive)
         if self._link.control_link_alive:
             await self._control.send(cmd)
+            return CommandResult.ok("hold")
+        return CommandResult.no_transport("hold")
 
-    async def land(self) -> None:
+    async def land(self) -> CommandResult:
         cmd = HopperCommand.create("land", ttl_s=self._config.command_ttl_s)
         self._safety.check(cmd, self._connection_state, self._link.control_link_alive)
         if self._link.control_link_alive:
             await self._control.send(cmd)
+            return CommandResult.ok("land")
+        return CommandResult.no_transport("land")
 
     # -- telemetry / capabilities --------------------------------------------
 
     def get_telemetry(self) -> Telemetry:
         tel = self._telemetry.get_telemetry()
-        # Patch battery from the dedicated battery manager.
-        battery_state = self._battery.update(tel.battery_percentage)
+        # Feed battery percentage to the state machine only when a real reading arrived.
+        if tel.battery_available:
+            self._battery.update(tel.battery_percentage)
         return tel
 
     def get_capabilities(self) -> Capabilities:
