@@ -205,3 +205,14 @@ def test_request_bodies_are_parsed(tmp_path):
         assert client.post("/api/missions", json={"mission_type": "RACE"}).status_code == 200
         assert client.post("/api/replay/seek", json={"time_offset": 1.5}).status_code == 200
         assert client.post("/api/replay/speed", json={"speed": 2.0}).status_code == 200
+
+
+def test_mavsdk_battery_is_already_a_percentage():
+    """Found in PX4 SITL: MAVSDK 2+ reports 0..100, so 16 % read as 1600 %."""
+    from vantaflight.mavlink.mavsdk_client import battery_percent
+
+    assert battery_percent(16.0) == 16.0
+    assert battery_percent(100.0) == 100.0
+    assert battery_percent(-1.0) == 0.0  # PX4: unknown
+    assert battery_percent(float("nan")) == 0.0
+    assert battery_percent(250.0) == 100.0

@@ -45,6 +45,17 @@ class MAVSDKError(RuntimeError):
         super().__init__(f"{code}: {detail}" if detail else code)
 
 
+def battery_percent(remaining: float) -> float:
+    """MAVSDK 2+ reports ``remaining_percent`` as 0..100 (1.x used 0..1).
+
+    PX4 sends -1 when the level is unknown; that and anything out of range is
+    clamped so a failsafe never sees 1600 % or a negative charge.
+    """
+    if remaining is None or remaining != remaining or remaining < 0:
+        return 0.0
+    return min(float(remaining), 100.0)
+
+
 @dataclass
 class PX4Telemetry:
     connected: bool = False
@@ -97,7 +108,7 @@ class MAVSDKClient:
         except ImportError:
             raise MAVSDKError(
                 "PX4_NOT_FOUND",
-                "mavsdk package is not installed. Install with: pip install mavsdk",
+                "mavsdk package is not installed. Install with: pip install \"mavsdk>=2,<4\"",
             )
 
         self._system = System()
@@ -231,9 +242,7 @@ class MAVSDKClient:
             tel.heading_deg = hdg.heading_deg
 
         def _battery(bat) -> None:
-            tel.battery_remaining_percent = (
-                bat.remaining_percent * 100 if bat.remaining_percent >= 0 else 0
-            )
+            tel.battery_remaining_percent = battery_percent(bat.remaining_percent)
 
         def _armed(is_armed) -> None:
             tel.armed = is_armed
