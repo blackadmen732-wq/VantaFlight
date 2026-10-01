@@ -26,7 +26,7 @@ instance via MAVLink/MAVSDK.
 
 **Requirements:**
 - PX4-Autopilot (cloned and built)
-- Python `mavsdk` package: `pip install mavsdk`
+- Python `mavsdk` package: `pip install -r backend/requirements-px4.txt` (`mavsdk>=2,<4`)
 - A simulator backend (Gazebo Classic, jMAVSim, or headless)
 
 **Quick Start:**

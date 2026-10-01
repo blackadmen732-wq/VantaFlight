@@ -1,15 +1,11 @@
-"""Normalized, drone-agnostic data models.
-
-Every adapter (mock, and later PX4/ArduPilot/etc.) reports state through these
-models, so the rest of VantaFlight never needs to know which drone it talks to.
-"""
+"""Normalized, drone-agnostic data models."""
 from __future__ import annotations
 
 import time
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FlightMode(str, Enum):
@@ -17,6 +13,10 @@ class FlightMode(str, Enum):
     TAKEOFF = "TAKEOFF"
     HOLD = "HOLD"
     LANDING = "LANDING"
+    #: Flying toward a commanded waypoint (mission leg or goto).
+    MISSION = "MISSION"
+    #: Flying home before landing (return-to-launch).
+    RETURNING = "RETURNING"
 
 
 class ConnectionQuality(str, Enum):
@@ -25,6 +25,14 @@ class ConnectionQuality(str, Enum):
     FAIR = "FAIR"
     GOOD = "GOOD"
     EXCELLENT = "EXCELLENT"
+
+
+class TelemetrySource(str, Enum):
+    HOPPER_NATIVE = "HOPPER_NATIVE"
+    VANTASTATE_ESTIMATED = "VANTASTATE_ESTIMATED"
+    CAMERA_DERIVED = "CAMERA_DERIVED"
+    SIMULATED = "SIMULATED"
+    UNAVAILABLE = "UNAVAILABLE"
 
 
 class Telemetry(BaseModel):
@@ -43,10 +51,28 @@ class Telemetry(BaseModel):
     heading: float = 0.0
     battery_percentage: float = 100.0
     connection_quality: ConnectionQuality = ConnectionQuality.NONE
+    health_all_ok: bool = True
+    # Availability flags distinguish placeholders from measurements. Safety
+    # code must check them before trusting the corresponding value.
+    battery_available: bool = True
+    altitude_available: bool = True
+    velocity_available: bool = True
+    position_available: bool = True
+    #: Seconds since the last message actually received from the aircraft.
+    #: 0 for adapters that always have fresh state (the simulator).
+    link_age_s: float = 0.0
 
     @property
     def airborne(self) -> bool:
-        return self.connected and self.altitude > 0.15
+        return self.connected and self.altitude_available and self.altitude > 0.15
+
+
+class CapabilityStatus(str, Enum):
+    SUPPORTED = "SUPPORTED"
+    UNSUPPORTED = "UNSUPPORTED"
+    UNAVAILABLE = "UNAVAILABLE"
+    UNKNOWN = "UNKNOWN"
+    DEGRADED = "DEGRADED"
 
 
 class Capabilities(BaseModel):
@@ -64,14 +90,74 @@ class Capabilities(BaseModel):
     supports_camera: bool = False
     is_simulated: bool = True
     max_altitude_m: float = 120.0
+    #: Can fly to a local (x, y, altitude) position — required for missions.
+    supports_goto: bool = False
+    #: Has a native return-to-launch behaviour.
+    supports_return: bool = False
     supported_capabilities: list[str] = Field(default_factory=list)
+    capability_map: dict[str, CapabilityStatus] = Field(default_factory=dict)
+
+
+class CommandStatus(str, Enum):
+    SENT = "SENT"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    REJECTED = "REJECTED"
+    NOT_SENT = "NOT_SENT"
+    TRANSPORT_UNAVAILABLE = "TRANSPORT_UNAVAILABLE"
+    TIMED_OUT = "TIMED_OUT"
+    EXPIRED = "EXPIRED"
+    UNSUPPORTED = "UNSUPPORTED"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+    @property
+    def transmitted(self) -> bool:
+        return self in (CommandStatus.SENT, CommandStatus.ACKNOWLEDGED)
 
 
 class CommandResult(BaseModel):
     command: str
     accepted: bool
+    status: CommandStatus = CommandStatus.SENT
     message: str = ""
     timestamp: float = Field(default_factory=time.time)
+
+    @model_validator(mode="after")
+    def _refused_is_never_sent(self) -> "CommandResult":
+        # A refused command that does not say what happened to it must not
+        # inherit the SENT default: the audit trail would claim a transmission.
+        if not self.accepted and "status" not in self.model_fields_set:
+            self.status = CommandStatus.REJECTED
+        return self
+
+    @classmethod
+    def ok(cls, command: str, msg: str = "") -> "CommandResult":
+        return cls(command=command, accepted=True, status=CommandStatus.SENT, message=msg)
+
+    @classmethod
+    def acknowledged(cls, command: str, msg: str = "") -> "CommandResult":
+        return cls(command=command, accepted=True, status=CommandStatus.ACKNOWLEDGED, message=msg)
+
+    @classmethod
+    def no_transport(cls, command: str) -> "CommandResult":
+        return cls(
+            command=command,
+            accepted=False,
+            status=CommandStatus.TRANSPORT_UNAVAILABLE,
+            message=f"No active transport; '{command}' was NOT transmitted to any device.",
+        )
+
+    @classmethod
+    def unsupported(cls, command: str, reason: str = "") -> "CommandResult":
+        return cls(
+            command=command,
+            accepted=False,
+            status=CommandStatus.UNSUPPORTED,
+            message=reason or f"'{command}' is not supported by the active adapter.",
+        )
+
+    @classmethod
+    def rejected(cls, command: str, reason: str) -> "CommandResult":
+        return cls(command=command, accepted=False, status=CommandStatus.REJECTED, message=reason)
 
 
 class FlightEvent(BaseModel):
@@ -83,3 +169,4 @@ class FlightEvent(BaseModel):
 class AdapterType(str, Enum):
     MOCK = "mock"
     PX4_SITL = "px4_sitl"
+    HOPPER = "hopper"

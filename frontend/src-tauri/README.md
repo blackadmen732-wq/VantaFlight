@@ -1,17 +1,28 @@
-# VantaFlight Desktop Shell (Tauri)
+# VantaFlight Desktop App (Tauri)
 
-This directory is the **scaffold** for packaging VantaFlight as a downloadable
-Linux desktop app with [Tauri](https://tauri.app). It is intentionally **not
-built** as part of the foundation PR.
+Packages VantaFlight 1.0.0 as an AppImage and a `.deb` with the VantaFlight icon.
 
-The foundation runs as a local web app (Vite dev server + Python Flight Core).
-Later, `npm run tauri dev` / `npm run tauri build` will wrap the same frontend
-into a native window and produce `.AppImage` / `.deb` artifacts.
+## Build
 
-Before building for real you will need:
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev   # once
+cd frontend
+npx tauri build
+```
 
-- The Rust toolchain (already available via `cargo`).
-- Tauri v2 system dependencies (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, etc.).
-- An app icon at `icons/icon.png`.
+Bundles land in `src-tauri/target/release/bundle/{appimage,deb}/`.
 
-No Tauri build is required to run or evaluate the foundation.
+## How it runs
+
+The window shows `public/splash.html` while `src/main.rs` brings up the
+Flight Core. If a VantaFlight backend already answers on port 8000
+(`VANTAFLIGHT_PORT`), the app uses it and leaves it running. Otherwise it
+creates a venv in `~/.local/share/com.vantaflight.app` (on first launch, or when
+an update changes `requirements.txt`), starts uvicorn from the bundled backend,
+and stops it when the window closes. The backend serves the bundled UI, so the
+window navigates to `http://127.0.0.1:8000/`.
+
+Needs `python3` (3.10+) and `python3-venv` on the system; the `.deb` declares
+them. `backend.log` in the data folder records setup and backend output.
+
+Icons were generated from the VantaFlight logo with `npx tauri icon`.

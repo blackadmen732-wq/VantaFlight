@@ -1,4 +1,4 @@
-# VantaFlight Architecture (V0.3)
+# VantaFlight Architecture (1.0.0)
 
 ## Overview
 
@@ -6,19 +6,27 @@ VantaFlight is a local-first drone simulation and control platform. It runs
 entirely on one machine with no cloud dependency. The system connects to
 either a built-in mock adapter or a PX4 SITL instance via MAVLink.
 
+1.0.0 keeps the V0.3 Flight Core at the centre and layers missions, routing,
+failsafes, the Hopper adapter, training, replay, Digital Twin 2.0 and
+evolution around it. Perception and planning consume normalized models and never bypass
+the adapter, safety, or PX4 stabilization boundaries.
+
 ## System Layers
 
 ```
 ┌──────────────────────────────────────┐
-│           React Dashboard            │  TypeScript / Vite
-│  (controls, twin view, sim lab)      │  Port 5173
+│   React UI (browser or Tauri app)    │  TypeScript / Vite
+│ flight, mission, twin, forge, evol.  │  :5173 dev, served by :8000 in app
 ├──────────────────────────────────────┤
 │          FastAPI + WebSocket         │  Python / Uvicorn
 │     (REST commands, telemetry WS)    │  Port 8000
 ├──────────────────────────────────────┤
 │          Flight Controller           │
-│  (session state, safety, sampling)   │
-├──────────────────────────────────────┤
+│  (session state, safety, tick loop)  │
+├──────────────┬───────────────────────┤
+│ MissionRunner│  FailsafeGuardian     │
+│ (waypoints)  │  (battery, fence,link)│
+├──────────────┴───────────────────────┤
 │       Connection Manager             │
 │  (adapter discovery & selection)     │
 ├──────────┬───────────────────────────┤
@@ -29,9 +37,37 @@ either a built-in mock adapter or a PX4 SITL instance via MAVLink.
 │  (state, trajectory, session)        │
 ├──────────────────────────────────────┤
 │       SQLite (WAL mode)              │
-│  (flights, telemetry, events)        │
+│  (flights, courses, runs, metrics)   │
 └──────────────────────────────────────┘
 ```
+
+## Intelligence Pipeline (from V0.5)
+
+```
+CameraManager ─┬─ latest FramePacket → VantaFrame → VantaDetect → VantaPose
+               │                                      ↓
+               │                              VantaTrack + optical flow
+               │                                      ↓
+               │  normalized aircraft state → VantaFusion
+               │                                      ↓
+               │                         VantaScene → VantaPredict
+               │                                      ↓
+               │                              VantaRace planner
+               │                                      ↓
+               │                         DesiredTrajectoryState
+               │                                      ↓
+               │                          simulation-only PX4 boundary
+               │
+               └─ lower-priority preview boundary (transport deferred)
+
+Digital Twin truth ── validation/analyzer only; never perception input
+CourseLab ── seeded path-first courses, gates, difficulty and experiments
+AsyncRecorder ── bounded queue and batched SQLite writes
+```
+
+Vision modules have no MAVSDK dependency. Racing modules have no OpenCV
+dependency. `DesiredTrajectoryState` contains position, velocity,
+acceleration, and yaw setpoints—not motor or PWM commands.
 
 ## Key Design Decisions
 
@@ -55,6 +91,28 @@ The `MAVSDKClient` class is the only code that imports `mavsdk`. It can be
 injected (for testing) or created with a `MAVLinkConfig`. The lazy import
 means the `mavsdk` package is only required when actually connecting to PX4.
 
+### One Tick, No Hidden Tasks
+The server calls `FlightController.tick()` at the stream rate. Each tick
+samples telemetry, runs the failsafe guardian, then advances the mission
+runner. Missions and failsafes own no background tasks, so there is nothing to
+leak or race, and tests drive them deterministically with a fake clock.
+
+### Missions Go Through the Same Gate
+The mission runner never calls an adapter. It issues `goto`, `takeoff`, etc.
+through `FlightController.command(..., source="mission")`, so mission commands
+pass the same safety checks and are recorded like operator commands. Failsafes
+use `source="failsafe"`. Operator commands abort an active mission.
+
+### Routing Is Pure
+`routing/` (geometry, airspace, tour, planner) is pure Python with no I/O: it
+turns stops and zones into a `MissionPlan`. The controller only adds the live
+battery level, and the safety gate and plan checks reuse the same `Airspace`
+object, so planning and enforcement can never disagree about where a zone is.
+
+### Local Coordinates
+All positions are local ENU metres from home (`x` east, `y` north). Adapters
+that speak GPS (PX4) convert at the boundary. See [MISSIONS.md](MISSIONS.md).
+
 ### Central Configuration
 All environment variable lookups live in `vantaflight/config.py`. No other
 module reads `os.environ` directly.
@@ -69,6 +127,13 @@ backend/
     core/             # FlightController, safety
     data/             # SQLite database
     digital_twin/     # Twin state, trajectory, session
+    vision/           # VantaSight capture-to-prediction pipeline
+    racing/           # VantaRace state, trajectory, speed planning
+    course_lab/        # VantaForge generation, analysis, experiments
+    mission/          # Plans, planner checks, patterns, runner, QGC files
+    routing/          # Airspace, safe paths, visiting order, route planner
+    geo.py            # Local metres <-> latitude/longitude
+    safety/           # Validator, geofence, failsafe guardian
     mavlink/          # MAVSDKClient wrapper
     models/           # Telemetry, FlightMode, etc.
     config.py         # Central configuration
@@ -76,7 +141,7 @@ backend/
   tests/              # pytest suite
 frontend/
   src/
-    components/       # AdapterSelector, DigitalTwin, etc.
+    components/       # AdapterSelector, DigitalTwin, MissionPanel, etc.
     pages/            # SimulationLab
     App.tsx           # Main app with routing
     api.ts            # REST + WebSocket client
@@ -93,5 +158,26 @@ docs/                 # Project documentation
 4. Commands flow REST → FlightController → Adapter
 5. Telemetry flows Adapter → FlightController → WebSocket → Dashboard
 6. Twin state updates on each telemetry sample
-7. SQLite records telemetry samples and flight events
-8. On disconnect, a run summary is computed and available via REST
+7. Failsafe guardian checks the sample; mission runner advances
+8. SQLite records telemetry samples, commands (with their source) and events
+9. On disconnect, a run summary is computed and available via REST
+
+
+## Desktop app (Tauri)
+
+`frontend/src-tauri` packages VantaFlight as an AppImage and a `.deb`. The
+window opens a splash page while the Rust shell brings up the Flight Core:
+
+1. If a VantaFlight backend already answers `/api/health` on port 8000
+   (`VANTAFLIGHT_PORT`), the app uses it and leaves it running on exit.
+2. Otherwise it creates a private venv in the app data folder
+   (`~/.local/share/com.vantaflight.app/venv`) on first launch, or when an
+   update changes `requirements.txt`, then starts uvicorn from the bundled
+   backend with `VANTAFLIGHT_FRONTEND_DIST` pointing at the bundled UI and
+   `VANTAFLIGHT_DB` in the same folder.
+3. Once healthy, the window navigates to `http://127.0.0.1:8000/`, so the UI
+   talks to the API same-origin exactly as in a browser.
+4. On exit the shell stops the backend it started.
+
+Flights, the database and `backend.log` live in the app data folder and survive
+updates and uninstalls.

@@ -1,67 +1,86 @@
 # VantaFlight Project Status
 
-## Current Version: 0.3.0 — Simulation Control Foundation
+## Current Version: 1.0.0
 
-### What's Done
+V1 brings together the V0.9 platform (Hopper adapter, training engine, replay,
+Digital Twin 2.0, hardware mode and preflight) and the V0.4 autonomy line
+(waypoint missions, routing engine, failsafes, link health), and adds the
+Mission, Twin, VantaForge and Evolution workspaces and the desktop app.
 
-**Job 1: Hardened Flight Core**
-- [x] Explicit session state machine (NO_SESSION → CONNECTED → ACTIVE → COMPLETED/INTERRUPTED)
-- [x] Flight ID cleared after session end
-- [x] No double termination
-- [x] Interrupted flights stay interrupted on disconnect
-- [x] Reconnect creates new flight ID
-- [x] Commands rejected after session end
-- [x] Telemetry not written after termination
-- [x] Duplicate connection_loss events prevented
-- [x] Idempotent disconnect
-- [x] CORS restricted to localhost origins (configurable)
-- [x] Central config.py for all env vars
+### Verification levels
 
-**Job 2: PX4 SITL + MAVSDK Control**
-- [x] PX4SITLAdapter implementing DroneAdapter
-- [x] MAVSDKClient wrapper with lazy import
-- [x] Configurable PX4 SITL endpoint
-- [x] Telemetry normalization (PX4 → VantaFlight model)
-- [x] Connect/disconnect/arm/disarm/takeoff/hold/land
-- [x] ConnectionManager upgraded for adapter selection
-- [x] Capabilities system strengthened
+Each claim is reported at the level it was actually reached (see
+[CHROMEBOOK_LINUX.md](CHROMEBOOK_LINUX.md#hardware-validation-ladder)).
 
-**Job 3: Digital Twin + Dashboard**
-- [x] Digital twin package (state, trajectory buffer, session tracking)
-- [x] Twin consumes normalized Telemetry only
-- [x] Run summary with duration, max altitude/speed, battery delta
-- [x] React dashboard with adapter selector
-- [x] Three.js digital twin 3D visualization
-- [x] Simulation Lab page
-- [x] Run summary card
-- [x] Diagnostics panel
-- [x] React Router navigation
-- [x] WebSocket reconnect with exponential backoff
+| Area | Level reached |
+|------|---------------|
+| Flight Core, safety rules, session state machine | UNIT_TESTED, INTEGRATION_TESTED, SITL_VERIFIED |
+| Waypoint missions (square/orbit/survey) | SITL_VERIFIED |
+| Battery failsafe → return home → land | SITL_VERIFIED |
+| Geofence and stale-link failsafes | INTEGRATION_TESTED (mock), not yet flown on SITL |
+| Routing engine and no-fly zones | INTEGRATION_TESTED |
+| Replay of a recorded flight | SITL_VERIFIED |
+| VantaRace / vision autonomy loop | FAST_SIM_VERIFIED; not started from the app against PX4 |
+| Training campaigns, weakness map, champion/challenger | INTEGRATION_TESTED |
+| Hopper camera-only mode | INTEGRATION_TESTED; needs REAL_CAMERA / HOPPER_OBSERVE on hardware |
+| Hopper live control | Disabled: FTW's control protocol is undocumented |
+| Desktop app (AppImage, .deb) | Built, installed, launched, closed (backend stopped), reinstalled and removed on Ubuntu 24.04 under Xvfb; not yet on a Chromebook |
 
-**Testing**
-- [x] 34+ backend tests (lifecycle, PX4 adapter, digital twin, config, API)
-- [x] 8 frontend tests (types, components)
-- [x] All tests pass without PX4 running
+`SITL_VERIFIED` means `simulation/px4/e2e_flight.py` passed against PX4 v1.14.3
+with Gazebo (15/15 stages; see [PX4.md](PX4.md#end-to-end-verification)).
 
-**Infrastructure**
-- [x] Simulation scripts (launch_sitl.sh, check_environment.sh)
-- [x] Documentation (ARCHITECTURE, STATUS, SIMULATION, PX4, SAFETY)
-- [x] SQLite schema migration (v1 → v2)
-- [x] Version bumped to 0.3.0 everywhere
+### V1.0.0
 
-### What's Not In V0.3
+**Integration**
+- [x] V0.4 missions, routing and failsafes merged into V0.9 without replacing
+      its typed transport results, connect lock, hardware-mode gating or
+      telemetry availability flags
+- [x] Both mission systems kept: V0.4 waypoint plans/runner (`mission/checks.py`,
+      `runner.py`) and V0.9 typed goals/registry (`mission/models.py`, `registry.py`)
+- [x] Failsafes and plan checks ignore battery/position a link does not report
+- [x] Persisted missions restored at startup; interrupted ones marked ABORTED
+- [x] Review fixes from PR #6: refused commands are never reported as sent,
+      Hopper camera-only links are not shown as disconnected, training runs are
+      persisted without a fake course id, request models at module level
 
-- Physical drone control (hardware MAVLink)
-- Autonomous racing logic
-- Authentication / cloud services
-- AI / voice / swarm features
-- Camera integration
-- Waypoint missions
-- Real GPS navigation
+**Workspaces**
+- [x] Mission: planner, airspace, digital twin, saved typed missions
+- [x] Twin: live Digital Twin 2.0 snapshots with layer toggles, 3D/top/side
+- [x] VantaForge: CourseLab-style course generation, stats, projections, validation
+- [x] Evolution: weakness map and champion/challenger evaluation
+
+**Desktop app**
+- [x] Tauri AppImage and `.deb` with the VantaFlight icon
+- [x] Backend lifecycle: private venv on first launch, start/stop with the app,
+      reuse of an already running backend
+
+**Quality**
+- [x] Backend: 628 tests on Python 3.10, 3.11 and 3.12
+- [x] Frontend: 38 tests, typecheck and production build clean
+- [x] `npm audit`: 0 vulnerabilities (Vite 8, Vitest 5)
+- [x] PX4 SITL end-to-end flight (found and fixed the MAVSDK battery scaling bug)
+
+### Not in V1
+
+- Live Hopper control or program deployment (no official transport)
+- Physical autonomous flight of any kind
+- Starting the VantaRace racing loop from the app against PX4
+- Cloud services, accounts, swarm, voice
 
 ### Known Limitations
 
-- PX4 SITL requires external PX4-Autopilot installation
-- Three.js bundle adds ~700KB to the frontend build
+- PX4 mode needs `pip install -r backend/requirements-px4.txt` (`mavsdk>=2,<4`)
 - Mock adapter uses simplified physics (no wind, no inertia)
-- The `mavsdk` Python package must be installed separately for PX4 mode
+- Mission battery estimates use the simulator's drain rate
+- The desktop app needs `python3` and `python3-venv` on the system; the first
+  launch downloads the backend's Python packages
+
+## Previous versions
+
+- **0.9.0**: Hopper adapter, Chromebook launcher, training engine, replay,
+  Digital Twin 2.0, mission architecture, database V4.
+- **0.5.0**: VantaSight vision, VantaRace, CourseLab, async recorder
+  (see [V0.5_BACKEND_INTELLIGENCE.md](V0.5_BACKEND_INTELLIGENCE.md)).
+- **0.4.0**: Waypoint missions, routing engine, failsafes, link health
+  (see [MISSIONS.md](MISSIONS.md), [ROUTING.md](ROUTING.md)).
+- **0.3.0**: Hardened Flight Core, PX4 SITL via MAVSDK, Digital Twin, dashboard.

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>VantaFlight</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #070b14; color: #c9d6ef; font: 15px/1.5 system-ui, sans-serif; }
+      main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 0 24px; text-align: center; }
+      img { width: 112px; height: 112px; border-radius: 24px; }
+      h1 { margin: 0; font-size: 22px; letter-spacing: 0.2em; color: #e8f0ff; }
+      #status { color: #7f93b8; max-width: 520px; }
+      #status.failed { color: #ff6b81; }
+      .spin { width: 22px; height: 22px; border: 3px solid #1d2a44; border-top-color: #2f8bff; border-radius: 50%; animation: s 0.9s linear infinite; }
+      .failed + .spin, .hidden { display: none; }
+      @keyframes s { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/vantaflight-icon.png" alt="" />
+      <h1>VANTAFLIGHT</h1>
+      <p id="status">Starting the Flight Core…</p>
+      <div class="spin"></div>
+    </main>
+    <script>
+      // Called by the desktop shell (src-tauri/src/main.rs) with progress.
+      window.vfStatus = function (message, failed) {
+        var el = document.getElementById("status");
+        el.textContent = message;
+        el.className = failed ? "failed" : "";
+      };
+    </script>
+  </body>
+</html>

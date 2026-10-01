@@ -3,13 +3,16 @@
 VantaFlight is a **local-first** autonomous competition drone software platform.
 It runs entirely on your machine — no internet, no cloud, no accounts required.
 
-This repository currently contains the **foundation**: a drone-agnostic flight
-core, a simulated (mock) drone, live telemetry streaming, safety-checked flight
-commands, a simple desktop UI, and local SQLite recording of every flight.
+**Version 1.0.0.** This repository contains the drone-agnostic Flight Core,
+mock, PX4 SITL and Hopper adapters, autonomous missions with failsafes, a
+routing engine, the live Digital Twin, VantaForge course generation, training
+and evolution, replay, and the desktop app (browser or Tauri AppImage/.deb).
+See [docs/STATUS.md](docs/STATUS.md) for what is verified at which level.
 
-> Scope note: this is the stable base. Real drone backends (PX4/ArduPilot),
-> computer vision, digital twin, simulation, competition logic, and packaging
-> are intentionally **not** part of this foundation and will come later.
+> Safety: autonomous flight is simulation-only. VantaFlight emits normalized
+> trajectory/setpoint models, never raw motor PWM. PX4 remains responsible for
+> stabilization and motor control. Hopper is observe-only: live control stays
+> disabled until FTW publishes a control interface.
 
 ## What works today
 
@@ -24,6 +27,35 @@ Open the app, and you can:
 6. Press **Hold** to loiter.
 7. Press **Land** and watch it descend and auto-disarm.
 8. The entire run is saved locally to SQLite (`backend/vantaflight.db`).
+
+And autonomously:
+
+9. Pick a **Square**, **Orbit** or **Survey** pattern (or edit waypoints) in the
+   **Mission** panel, see the distance, time and battery estimate, and press
+   **Start mission**. The drone takes off, flies the plan, and comes home.
+10. If the battery runs low, the aircraft leaves the geofence, or telemetry
+    goes stale, a **failsafe** returns it home, lands it, or holds it, and
+    the UI shows why. Rehearse each one from **Sim Lab → Failsafe Rehearsal**.
+
+11. Mark **no-fly zones**, then press **Optimize route**: VantaFlight finds the
+    shortest safe order and path through your stops, flies around the zones,
+    and warns you if any stop is past the battery's point of no return.
+    Export the result as a QGroundControl `.plan`, or import one.
+
+See [docs/MISSIONS.md](docs/MISSIONS.md) and [docs/ROUTING.md](docs/ROUTING.md)
+for the details.
+
+And in the other workspaces:
+
+12. **Mission**: plan and fly waypoint missions and save typed missions
+    (search & rescue, delivery, inspection, race) that survive restarts.
+13. **Twin**: the live Digital Twin, with the actual and planned path,
+    zones and geofence, in 3D, top or side view.
+14. **VantaForge**: generate a race course in a safe volume, inspect its
+    stats, projections and difficulty, and train on that course type.
+15. **Evolution**: see where the autonomy stack fails most across training
+    runs, and check whether a challenger really beats the champion.
+16. **Replay** any recorded flight frame by frame.
 
 Safety rules reject invalid commands (e.g. takeoff while disconnected, takeoff
 before arming, disarm while airborne) and the UI recovers cleanly from a
@@ -40,12 +72,18 @@ vantaflight/
 │       ├── adapters/mock.py     MockDroneAdapter (simulated physics)
 │       ├── connection/manager.py ConnectionManager (discovery + lifecycle)
 │       ├── safety/validator.py  Command safety rules
+│       ├── safety/failsafe.py   Automatic battery/geofence/link failsafes
+│       ├── mission/             Waypoint plans, checks, patterns, runner, QGC files
+│       ├── routing/             No-fly zones, safe paths, route optimizer
 │       ├── data/database.py     SQLite (WAL) local persistence
 │       ├── core/flight_controller.py  Orchestrator
+│       ├── vision/              Camera, detection, pose, tracking, fusion
+│       ├── racing/              Trajectory, speed envelope, race states
+│       ├── course_lab/          Course generation, analysis, experiments
 │       └── main.py              FastAPI HTTP + WebSocket server
 ├── frontend/                    Desktop UI (React, TypeScript, Vite)
 │   ├── src/                     App, telemetry stream, controls, timeline
-│   └── src-tauri/               Tauri packaging scaffold (not yet built)
+│   └── src-tauri/               Tauri desktop app (AppImage, .deb)
 └── scripts/install.sh           One-shot local setup
 ```
 
@@ -55,7 +93,7 @@ that one contract — nothing else changes.
 
 ## Running VantaFlight locally (Linux / Chromebook Linux)
 
-You need Python 3.10+ and Node.js 20+ (Node 22 recommended for full test suite).
+You need Python 3.10+ and Node.js 20.19+ or 22.12+.
 
 ### 1. Install dependencies
 
@@ -89,6 +127,27 @@ and WebSocket traffic to the Flight Core automatically.
 Then: **Connect → Arm → Takeoff → Hold → Land**. Every run is recorded to
 `backend/vantaflight.db`.
 
+### Desktop app
+
+Build the AppImage and `.deb` (needs Rust and the Tauri system packages,
+`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`):
+
+```bash
+cd frontend
+npx tauri build
+sudo apt install ./src-tauri/target/release/bundle/deb/VantaFlight_1.0.0_amd64.deb
+```
+
+The app starts and stops its own Flight Core; the first launch sets up a
+Python venv in `~/.local/share/com.vantaflight.app` (it needs `python3-venv`).
+Uninstall with `sudo apt remove vanta-flight`; your flights stay in that folder.
+
+### PX4 SITL
+
+See [docs/PX4.md](docs/PX4.md). `pip install -r backend/requirements-px4.txt`,
+start PX4 SITL, pick **PX4 SITL** in the adapter selector, and connect.
+`simulation/px4/e2e_flight.py` flies the whole path end to end.
+
 ## Tests
 
 ```bash
@@ -99,11 +158,13 @@ python -m pytest
 
 Covers connect/disconnect, arm/disarm, takeoff/hold/land, invalid-command
 rejection, telemetry, SQLite recording, simulated connection loss, and
-reconnect, plus the HTTP/WebSocket API.
+reconnect, missions, failsafes, PX4 coordinate conversion, plus the
+HTTP/WebSocket API.
 
-Frontend type checking:
+Frontend type checking and tests:
 
 ```bash
 cd frontend
 npm run typecheck
+npm test
 ```
