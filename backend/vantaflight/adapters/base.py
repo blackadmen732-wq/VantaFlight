@@ -46,6 +46,24 @@ class DroneAdapter(abc.ABC):
     async def land(self) -> None:
         """Begin an automated landing."""
 
+    async def goto(
+        self, x: float, y: float, altitude: float, speed_m_s: float | None = None
+    ) -> None:
+        """Fly to a local position (metres east/north of home, metres up).
+
+        Optional: adapters that support it set ``Capabilities.supports_goto``.
+        Missions require it.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support goto")
+
+    async def return_home(self) -> None:
+        """Fly back over home and land.
+
+        Optional: adapters that support it set ``Capabilities.supports_return``.
+        Without it, failsafes that want to return home land in place instead.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support return_home")
+
     @abc.abstractmethod
     def get_telemetry(self) -> Telemetry:
         """Return the latest normalized telemetry snapshot."""

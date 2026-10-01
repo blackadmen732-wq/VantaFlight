@@ -5,4 +5,4 @@ This package contains the drone-agnostic flight core: adapters, connection
 management, telemetry, safety, and local persistence.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

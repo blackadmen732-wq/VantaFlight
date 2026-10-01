@@ -1,4 +1,4 @@
-# VantaFlight Architecture (V0.3)
+# VantaFlight Architecture (V0.4)
 
 ## Overview
 
@@ -17,8 +17,11 @@ either a built-in mock adapter or a PX4 SITL instance via MAVLink.
 │     (REST commands, telemetry WS)    │  Port 8000
 ├──────────────────────────────────────┤
 │          Flight Controller           │
-│  (session state, safety, sampling)   │
-├──────────────────────────────────────┤
+│  (session state, safety, tick loop)  │
+├──────────────┬───────────────────────┤
+│ MissionRunner│  FailsafeGuardian     │
+│ (waypoints)  │  (battery, fence,link)│
+├──────────────┴───────────────────────┤
 │       Connection Manager             │
 │  (adapter discovery & selection)     │
 ├──────────┬───────────────────────────┤
@@ -55,6 +58,28 @@ The `MAVSDKClient` class is the only code that imports `mavsdk`. It can be
 injected (for testing) or created with a `MAVLinkConfig`. The lazy import
 means the `mavsdk` package is only required when actually connecting to PX4.
 
+### One Tick, No Hidden Tasks
+The server calls `FlightController.tick()` at the stream rate. Each tick
+samples telemetry, runs the failsafe guardian, then advances the mission
+runner. Missions and failsafes own no background tasks, so there is nothing to
+leak or race, and tests drive them deterministically with a fake clock.
+
+### Missions Go Through the Same Gate
+The mission runner never calls an adapter. It issues `goto`, `takeoff`, etc.
+through `FlightController.command(..., source="mission")`, so mission commands
+pass the same safety checks and are recorded like operator commands. Failsafes
+use `source="failsafe"`. Operator commands abort an active mission.
+
+### Routing Is Pure
+`routing/` (geometry, airspace, tour, planner) is pure Python with no I/O: it
+turns stops and zones into a `MissionPlan`. The controller only adds the live
+battery level, and the safety gate and plan checks reuse the same `Airspace`
+object, so planning and enforcement can never disagree about where a zone is.
+
+### Local Coordinates
+All positions are local ENU metres from home (`x` east, `y` north). Adapters
+that speak GPS (PX4) convert at the boundary. See [MISSIONS.md](MISSIONS.md).
+
 ### Central Configuration
 All environment variable lookups live in `vantaflight/config.py`. No other
 module reads `os.environ` directly.
@@ -69,6 +94,10 @@ backend/
     core/             # FlightController, safety
     data/             # SQLite database
     digital_twin/     # Twin state, trajectory, session
+    mission/          # Plans, planner checks, patterns, runner, QGC files
+    routing/          # Airspace, safe paths, visiting order, route planner
+    geo.py            # Local metres <-> latitude/longitude
+    safety/           # Validator, geofence, failsafe guardian
     mavlink/          # MAVSDKClient wrapper
     models/           # Telemetry, FlightMode, etc.
     config.py         # Central configuration
@@ -76,7 +105,7 @@ backend/
   tests/              # pytest suite
 frontend/
   src/
-    components/       # AdapterSelector, DigitalTwin, etc.
+    components/       # AdapterSelector, DigitalTwin, MissionPanel, etc.
     pages/            # SimulationLab
     App.tsx           # Main app with routing
     api.ts            # REST + WebSocket client
@@ -93,5 +122,6 @@ docs/                 # Project documentation
 4. Commands flow REST → FlightController → Adapter
 5. Telemetry flows Adapter → FlightController → WebSocket → Dashboard
 6. Twin state updates on each telemetry sample
-7. SQLite records telemetry samples and flight events
-8. On disconnect, a run summary is computed and available via REST
+7. Failsafe guardian checks the sample; mission runner advances
+8. SQLite records telemetry samples, commands (with their source) and events
+9. On disconnect, a run summary is computed and available via REST

@@ -17,6 +17,10 @@ class FlightMode(str, Enum):
     TAKEOFF = "TAKEOFF"
     HOLD = "HOLD"
     LANDING = "LANDING"
+    #: Flying toward a commanded waypoint (mission leg or goto).
+    MISSION = "MISSION"
+    #: Flying home before landing (return-to-launch).
+    RETURNING = "RETURNING"
 
 
 class ConnectionQuality(str, Enum):
@@ -43,6 +47,9 @@ class Telemetry(BaseModel):
     heading: float = 0.0
     battery_percentage: float = 100.0
     connection_quality: ConnectionQuality = ConnectionQuality.NONE
+    #: Seconds since the last message actually received from the aircraft.
+    #: 0 for adapters that always have fresh state (the simulator).
+    link_age_s: float = 0.0
 
     @property
     def airborne(self) -> bool:
@@ -64,6 +71,10 @@ class Capabilities(BaseModel):
     supports_camera: bool = False
     is_simulated: bool = True
     max_altitude_m: float = 120.0
+    #: Can fly to a local (x, y, altitude) position — required for missions.
+    supports_goto: bool = False
+    #: Has a native return-to-launch behaviour.
+    supports_return: bool = False
     supported_capabilities: list[str] = Field(default_factory=list)
 
 
