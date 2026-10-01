@@ -15,7 +15,16 @@ need() {
 }
 
 need python3
+need node
 need npm
+
+# The frontend toolchain (Vite 8) needs Node 20.19+ or 22.12+. Debian's
+# packaged nodejs is often older; see the README for installing Node 22.
+if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit((a===20&&b>=19)||(a===22&&b>=12)||a>22?0:1)'; then
+  echo "Node $(node --version) is too old: VantaFlight needs Node 20.19+ or 22.12+." >&2
+  echo "Install Node 22 (e.g. https://github.com/nvm-sh/nvm, then: nvm install 22) and re-run." >&2
+  exit 1
+fi
 
 PY_VER="$(python3 - <<'PY'
 import sys
