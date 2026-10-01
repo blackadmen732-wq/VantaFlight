@@ -1,23 +1,33 @@
 import type {
   AdapterType,
+  Airspace,
   AutonomyState,
+  CameraProfile,
   CampaignAnalysis,
   Capabilities,
-  CameraProfile,
   CommandResult,
   CourseDetail,
   CourseGenerationRequest,
   Diagnostics,
   DiscoveredDrone,
+  FailsafeStatus,
+  FaultKind,
   FaultProfileInfo,
+  FinishAction,
+  FusedTargetEstimate,
   HardwareInfo,
   HealthResponse,
-  FusedTargetEstimate,
+  MissionPlan,
+  MissionStatus,
+  PatternKind,
   PerformanceState,
+  PlanReport,
+  QgcPlan,
   RaceStateFrame,
-  RuntimeState,
+  RoutePlan,
   RunMetric,
   RunSummary,
+  RuntimeState,
   SceneState,
   SimulationState,
   TrainingCampaign,
@@ -25,36 +35,61 @@ import type {
   TrainingSummary,
   TwinState,
   VisionStatus,
+  Waypoint,
   WsFrame,
+  ZoneSpec,
 } from "./types";
+
+function describeError(data: unknown, status: number): string {
+  const body = data as { detail?: unknown; message?: unknown } | null;
+  const detail = body?.detail;
+  if (Array.isArray(detail)) {
+    // FastAPI validation errors: [{loc: [...], msg: "..."}]
+    return detail
+      .map((d: { loc?: unknown[]; msg?: string }) =>
+        `${(d.loc ?? []).slice(1).join(".")}: ${d.msg ?? "invalid"}`,
+      )
+      .join("; ");
+  }
+  if (typeof detail === "string") return detail;
+  if (typeof body?.message === "string") return body.message;
+  return `request failed (${status})`;
+}
 
 async function parseError(res: Response): Promise<Error> {
   try {
-    const body = await res.json() as { detail?: string; message?: string };
-    return new Error(body.detail ?? body.message ?? `request failed: ${res.status}`);
+    return new Error(describeError(await res.json(), res.status));
   } catch {
-    return new Error(`request failed: ${res.status}`);
+    return new Error(`request failed (${res.status})`);
   }
 }
 
-async function post(path: string, body?: unknown): Promise<CommandResult> {
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!res.ok) throw await parseError(res);
-  return (await res.json()) as CommandResult;
+  if (res.ok === false) throw await parseError(res);
+  return (await res.json()) as T;
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw await parseError(res);
-  return (await res.json()) as T;
+/**
+ * POST a command. Never throws: a network failure or a rejected request comes
+ * back as a not-accepted result, so the UI always has a message to show.
+ */
+async function post(path: string, body?: unknown): Promise<CommandResult> {
+  const command = path.replace(/^\/api\//, "");
+  try {
+    return await postJson<CommandResult>(path, body);
+  } catch (err) {
+    return {
+      command,
+      accepted: false,
+      message: err instanceof Error ? err.message : "flight core unreachable",
+      timestamp: Date.now() / 1000,
+    };
+  }
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -73,6 +108,57 @@ export const api = {
     post("/api/takeoff", { target_altitude_m: targetAltitudeM }),
   hold: () => post("/api/hold"),
   land: () => post("/api/land"),
+  returnHome: () => post("/api/return-home"),
+
+  mission: {
+    status: () => get<MissionStatus>("/api/mission"),
+    validate: (plan: MissionPlan) => postJson<PlanReport>("/api/mission/validate", plan),
+    start: (plan: MissionPlan) => post("/api/mission/start", plan),
+    pause: () => post("/api/mission/pause"),
+    resume: () => post("/api/mission/resume"),
+    abort: () => post("/api/mission/abort"),
+    pattern: (kind: PatternKind, params: Record<string, number> = {}) =>
+      postJson<{ ok: boolean; error: string | null; plan: MissionPlan | null }>(
+        "/api/mission/pattern",
+        { kind, params },
+      ),
+  },
+
+  airspace: {
+    get: () => get<Airspace>("/api/airspace"),
+    set: (zones: ZoneSpec[], marginM?: number) =>
+      postJson<{ ok: boolean; error: string | null; airspace: Airspace }>("/api/airspace", {
+        zones,
+        margin_m: marginM,
+      }),
+  },
+
+  route: {
+    optimize: (req: {
+      stops: Waypoint[];
+      optimize_order?: boolean;
+      finish?: FinishAction;
+      speed_m_s?: number;
+      name?: string;
+    }) =>
+      postJson<{ ok: boolean; error: string | null; route: RoutePlan | null }>(
+        "/api/route/optimize",
+        req,
+      ),
+    exportPlan: (plan: MissionPlan, includeAirspace = true) =>
+      postJson<QgcPlan>("/api/mission/export", { plan, include_airspace: includeAirspace }),
+    importPlan: (doc: QgcPlan) =>
+      postJson<{
+        ok: boolean;
+        error: string | null;
+        plan?: MissionPlan;
+        zones?: ZoneSpec[];
+        warnings?: string[];
+      }>("/api/mission/import", doc),
+  },
+
+  failsafe: () => get<FailsafeStatus>("/api/failsafe"),
+  injectFault: (kind: FaultKind, value: number) => post("/api/sim/fault", { kind, value }),
 
   health: () => get<HealthResponse>("/api/health"),
   discover: () => get<{ drones: DiscoveredDrone[] }>("/api/discover"),

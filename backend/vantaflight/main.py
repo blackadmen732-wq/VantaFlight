@@ -5,12 +5,14 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import time
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .api_models import (
     AutoCurriculumRequest,
@@ -31,15 +33,15 @@ from .api_models import (
     VisionStatusModel,
 )
 from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_VERSION
-from .connection import ConnectionManager, DiscoveredDrone
+from .connection import ConnectionManager
 from .core import FlightController
 from .course_lab import CourseGenerator, CourseValidator, SafeVolume
 from .data import AsyncRecorder, FlightDatabase
 from .intelligence import IntelligenceRuntime
-from .models import AdapterType
+from .models import AdapterType, CommandResult
 from .autonomy import AutonomyLoop, AutonomyConfig
 from .digital_twin.primitives import TwinSnapshotBuilder, TwinWorldSnapshot
-from .mission import MissionGoal, MissionRegistry, MissionSpec, MissionType, Waypoint
+from .mission import GoalWaypoint, MissionGoal, MissionRegistry, MissionSpec, MissionType
 from .runtime import (
     DeploymentMode,
     HardwareMode,
@@ -56,6 +58,22 @@ from .training import (
     DifficultyTier,
     TrainingEngine,
 )
+from .mission import (
+    FinishAction,
+    MissionPlan,
+    MissionState,
+    Waypoint,
+    build_pattern,
+    export_plan,
+    import_plan,
+)
+from .routing import RouteError
+
+logger = logging.getLogger(__name__)
+
+# A client that cannot take a frame within this time is dropped, so one stuck
+# browser tab can never stall telemetry for everyone else.
+WS_SEND_TIMEOUT_S = 1.0
 
 
 class TakeoffRequest(BaseModel):
@@ -66,11 +84,41 @@ class ConnectRequest(BaseModel):
     adapter_type: str = DEFAULT_ADAPTER
 
 
+class PatternRequest(BaseModel):
+    kind: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class FaultRequest(BaseModel):
+    kind: str
+    value: float
+
+
+class AirspaceRequest(BaseModel):
+    #: Each zone is {"name", "vertices": [[x, y], ...]} or {"name", "center": [x, y], "radius": r}.
+    zones: list[dict[str, Any]] = Field(default_factory=list)
+    margin_m: float | None = None
+
+
+class RouteRequest(BaseModel):
+    stops: list[Waypoint]
+    optimize_order: bool = True
+    finish: FinishAction = FinishAction.RETURN_HOME
+    speed_m_s: float | None = Field(default=None, gt=0, le=30)
+    name: str = "Optimized route"
+
+
+class ExportRequest(BaseModel):
+    plan: MissionPlan
+    include_airspace: bool = True
+
+
 class ConnectionHub:
     """Tracks connected WebSocket clients and broadcasts JSON frames."""
 
-    def __init__(self) -> None:
+    def __init__(self, send_timeout_s: float = WS_SEND_TIMEOUT_S) -> None:
         self._clients: set[WebSocket] = set()
+        self._send_timeout = send_timeout_s
 
     async def register(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -80,14 +128,16 @@ class ConnectionHub:
         self._clients.discard(ws)
 
     async def broadcast(self, message: dict) -> None:
-        dead: list[WebSocket] = []
-        for ws in list(self._clients):
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.unregister(ws)
+        clients = list(self._clients)
+        if not clients:
+            return
+        results = await asyncio.gather(
+            *(asyncio.wait_for(ws.send_json(message), self._send_timeout) for ws in clients),
+            return_exceptions=True,
+        )
+        for ws, result in zip(clients, results):
+            if isinstance(result, BaseException):
+                self.unregister(ws)
 
     @property
     def count(self) -> int:
@@ -174,42 +224,40 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.intelligence = intelligence
     app.state.training_engine = training_engine
 
+    async def stream_once() -> None:
+        telemetry = await controller.tick()
+        await hub.broadcast({"type": "telemetry", "data": telemetry.model_dump(mode="json")})
+        for event in controller.drain_events():
+            await hub.broadcast({"type": "event", "data": event.model_dump(mode="json")})
+        if controller.twin.active:
+            await hub.broadcast({"type": "twin", "data": controller.twin.state.to_dict()})
+        if controller.mission.state != MissionState.IDLE:
+            await hub.broadcast({"type": "mission", "data": controller.mission.status()})
+        await hub.broadcast(
+            {"type": "vision_state", "data": intelligence.vision_status.model_dump(mode="json")}
+        )
+        await hub.broadcast({"type": "scene_state", "data": intelligence.scene.model_dump(mode="json")})
+        await hub.broadcast({"type": "race_state", "data": intelligence.race.model_dump(mode="json")})
+        await hub.broadcast(
+            {"type": "simulation_state", "data": intelligence.simulation.model_dump(mode="json")}
+        )
+        await hub.broadcast({"type": "autonomy_state", "data": autonomy_loop.to_dict()})
+        snapshot = twin_builder.build()
+        _twin_snapshot["ref"] = snapshot
+        await hub.broadcast({"type": "twin_snapshot", "data": snapshot.to_dict()})
+
     async def stream_loop() -> None:
         period = 1.0 / STREAM_HZ
         while True:
             t_start = time.monotonic()
-            telemetry = controller.sample()
-            await hub.broadcast({"type": "telemetry", "data": telemetry.model_dump(mode="json")})
-            for event in controller.drain_events():
-                await hub.broadcast({"type": "event", "data": event.model_dump(mode="json")})
-            if controller.twin.active:
-                await hub.broadcast({"type": "twin", "data": controller.twin.state.to_dict()})
-            await hub.broadcast(
-                {
-                    "type": "vision_state",
-                    "data": intelligence.vision_status.model_dump(mode="json"),
-                }
-            )
-            await hub.broadcast(
-                {"type": "scene_state", "data": intelligence.scene.model_dump(mode="json")}
-            )
-            await hub.broadcast(
-                {"type": "race_state", "data": intelligence.race.model_dump(mode="json")}
-            )
-            await hub.broadcast(
-                {
-                    "type": "simulation_state",
-                    "data": intelligence.simulation.model_dump(mode="json"),
-                }
-            )
-            await hub.broadcast(
-                {"type": "autonomy_state", "data": autonomy_loop.to_dict()}
-            )
-            snapshot = twin_builder.build()
-            _twin_snapshot["ref"] = snapshot
-            await hub.broadcast(
-                {"type": "twin_snapshot", "data": snapshot.to_dict()}
-            )
+            try:
+                await stream_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Never let one bad sample kill telemetry, failsafes and
+                # missions for the rest of the session.
+                logger.exception("telemetry tick failed; continuing")
             elapsed = time.monotonic() - t_start
             await asyncio.sleep(max(0, period - elapsed))
 
@@ -228,8 +276,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         drones = await connection_manager.discover()
         results = []
         for d in drones:
-            adapter = connection_manager._build_adapter(d)
-            caps = adapter.get_capabilities()
+            caps = connection_manager.capabilities_for(d)
             results.append({
                 "drone_id": d.drone_id,
                 "name": d.name,
@@ -242,8 +289,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/connect")
     async def connect(req: ConnectRequest | None = None) -> dict:
-        from .models import CommandResult as CR
-
         adapter_type = req.adapter_type if req else DEFAULT_ADAPTER
         drones = await connection_manager.discover()
 
@@ -255,7 +300,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         if target is None:
             available = [d.adapter_type.value for d in drones]
-            return CR(
+            return CommandResult(
                 command="connect", accepted=False,
                 message=f"unknown adapter '{adapter_type}'; available: {available}",
             ).model_dump(mode="json")
@@ -299,6 +344,113 @@ def create_app(db_path: str | None = None) -> FastAPI:
         _require_command_mode()
         return (await controller.command("land")).model_dump(mode="json")
 
+    @app.post("/api/return-home")
+    async def return_home() -> dict:
+        _require_command_mode()
+        return (await controller.return_home()).model_dump(mode="json")
+
+    # -- airspace & routing ---------------------------------------------------
+    @app.get("/api/airspace")
+    async def get_airspace() -> dict:
+        return controller.airspace.to_dict()
+
+    @app.post("/api/airspace")
+    async def set_airspace(req: AirspaceRequest) -> dict:
+        try:
+            airspace = controller.set_airspace(req.zones, req.margin_m)
+        except (ValueError, TypeError, KeyError) as exc:
+            return {"ok": False, "error": str(exc), "airspace": controller.airspace.to_dict()}
+        return {"ok": True, "error": None, "airspace": airspace.to_dict()}
+
+    @app.post("/api/route/optimize")
+    async def optimize_route(req: RouteRequest) -> dict:
+        try:
+            route = controller.plan_route(
+                req.stops, optimize_order=req.optimize_order, finish=req.finish,
+                speed_m_s=req.speed_m_s, name=req.name,
+            )
+        except (RouteError, ValueError) as exc:
+            return {"ok": False, "error": str(exc), "route": None}
+        return {"ok": True, "error": None, "route": route.to_dict()}
+
+    @app.post("/api/mission/export")
+    async def mission_export(req: ExportRequest) -> dict:
+        """The plan as a QGroundControl .plan document."""
+        zones = [z.vertices for z in controller.airspace.zones] if req.include_airspace else []
+        fence = controller.airspace.geofence.radius_m if req.include_airspace else None
+        return export_plan(req.plan, controller.home_reference(), zones, fence)
+
+    @app.post("/api/mission/import")
+    async def mission_import(document: dict[str, Any]) -> dict:
+        """Read a QGroundControl .plan document (does not change the airspace)."""
+        try:
+            result = import_plan(document)
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            return {"ok": False, "error": f"could not read plan: {exc}"}
+        return {
+            "ok": True,
+            "error": None,
+            "plan": result["plan"].model_dump(mode="json"),
+            "zones": result["zones"],
+            "warnings": result["warnings"],
+        }
+
+    # -- missions -------------------------------------------------------------
+    @app.get("/api/mission")
+    async def mission_status() -> dict:
+        return controller.mission.status()
+
+    @app.post("/api/mission/validate")
+    async def mission_validate(plan: MissionPlan) -> dict:
+        return controller.check_mission(plan)
+
+    @app.post("/api/mission/start")
+    async def mission_start(plan: MissionPlan) -> dict:
+        _require_command_mode()
+        return (await controller.start_mission(plan)).model_dump(mode="json")
+
+    @app.post("/api/mission/pause")
+    async def mission_pause() -> dict:
+        return (await controller.pause_mission()).model_dump(mode="json")
+
+    @app.post("/api/mission/resume")
+    async def mission_resume() -> dict:
+        _require_command_mode()
+        return (await controller.resume_mission()).model_dump(mode="json")
+
+    @app.post("/api/mission/abort")
+    async def mission_abort() -> dict:
+        return (await controller.abort_mission()).model_dump(mode="json")
+
+    @app.post("/api/mission/pattern")
+    async def mission_pattern(req: PatternRequest) -> dict:
+        try:
+            plan = build_pattern(req.kind, req.params)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "plan": None}
+        return {"ok": True, "error": None, "plan": plan.model_dump(mode="json")}
+
+    # -- safety ---------------------------------------------------------------
+    @app.get("/api/failsafe")
+    async def failsafe_status() -> dict:
+        return controller.guardian.status()
+
+    @app.post("/api/sim/fault")
+    async def sim_fault(req: FaultRequest) -> dict:
+        """Rehearse a failure on the simulator (never on a real aircraft)."""
+        adapter = connection_manager.adapter
+        inject = getattr(adapter, "inject_fault", None)
+        if adapter is None or inject is None:
+            return CommandResult(
+                command="sim_fault", accepted=False,
+                message="fault injection needs a connected simulator",
+            ).model_dump(mode="json")
+        try:
+            message = inject(req.kind, req.value)
+        except ValueError as exc:
+            return CommandResult(command="sim_fault", accepted=False, message=str(exc)).model_dump(mode="json")
+        return CommandResult(command="sim_fault", accepted=True, message=message).model_dump(mode="json")
+
     @app.get("/api/telemetry")
     async def telemetry() -> dict:
         return controller.get_telemetry().model_dump(mode="json")
@@ -336,6 +488,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "adapter": connection_manager.active.name if connection_manager.active else None,
             "metrics": controller.metrics.to_dict(),
             "twin_active": controller.twin.active,
+            "link_age_s": controller.get_telemetry().link_age_s,
+            "mission_state": controller.mission.state.value,
+            "failsafe": controller.guardian.status(),
         }
 
     # -- V0.5 backend-intelligence contracts -------------------------------
@@ -493,7 +648,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 detail=f"invalid mission_type '{req.mission_type}'; valid: {[m.value for m in MissionType]}",
             )
         wps = tuple(
-            Waypoint(
+            GoalWaypoint(
                 x=w.get("x", 0), y=w.get("y", 0), z=w.get("z", 5),
                 speed_m_s=w.get("speed_m_s", 5.0),
                 heading_deg=w.get("heading_deg"),
@@ -797,9 +952,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def telemetry_ws(ws: WebSocket) -> None:
         await hub.register(ws)
         try:
+            # Bring a (re)connecting client up to date in one go.
             await ws.send_json(
                 {"type": "telemetry", "data": controller.get_telemetry().model_dump(mode="json")}
             )
+            for event in controller.recent_events():
+                await ws.send_json({"type": "event", "data": event.model_dump(mode="json")})
+            if controller.mission.state != MissionState.IDLE:
+                await ws.send_json({"type": "mission", "data": controller.mission.status()})
             while True:
                 await ws.receive_text()
         except WebSocketDisconnect:

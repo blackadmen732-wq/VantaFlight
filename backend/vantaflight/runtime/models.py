@@ -84,7 +84,7 @@ class ComputeNodeInfo:
     """Status of a local or remote compute node."""
     node_id: str = "local"
     protocol_version: int = 1
-    runtime_version: str = "0.9.0"
+    runtime_version: str = "1.0.0"
     deployment_mode: DeploymentMode = DeploymentMode.LOCAL_GROUND
     camera_ready: bool = False
     vision_ready: bool = False

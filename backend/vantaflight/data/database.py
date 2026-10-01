@@ -321,7 +321,7 @@ class FlightDatabase:
         adapter_type: str = "mock",
         is_simulated: bool = True,
         connection_type: str = "SIMULATED",
-        software_version: str = "0.5.0",
+        software_version: str = "1.0.0",
     ) -> int:
         with self._lock:
             cur = self._conn.execute(

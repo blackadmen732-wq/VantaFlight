@@ -54,11 +54,23 @@ The flight controller enforces a strict session state machine:
 
 The flight controller validates commands before forwarding to adapters:
 
-- **arm**: Requires connected state, not already airborne
-- **takeoff**: Requires armed state
+- **arm**: Requires connected state, not already armed
+- **takeoff**: Requires armed state, on the ground, target inside the geofence
 - **hold**: Requires airborne state
 - **land**: Requires airborne state
 - **disarm**: Requires not airborne
+- **goto**: Requires airborne state, altitude ≥ 1 m, target inside the geofence
+- **return_home**: Requires airborne state
+- **missions**: The whole plan is checked against the geofence and the live
+  battery level (with the low-battery reserve) before launch
+
+## Automatic Failsafes
+
+While armed and airborne, every telemetry sample is checked by the
+`FailsafeGuardian` (see [MISSIONS.md](MISSIONS.md#failsafes)): critical
+battery lands, low battery and geofence breaches return home, and stale
+telemetry holds position. Failsafes abort any running mission and are
+recorded in the flight log.
 
 ## Data Integrity
 
@@ -92,8 +104,8 @@ Before any physical drone support is added, the following must be
 implemented:
 - Hardware-in-the-loop safety layer
 - Emergency stop / kill switch
-- Geofencing
-- Battery failsafe automation
 - Pre-flight checklist enforcement
+- Validation of the V0.4 geofence and battery failsafes against real
+  airframes (battery estimates are tuned to the simulator)
 - Operator authentication
 - Regulatory compliance verification

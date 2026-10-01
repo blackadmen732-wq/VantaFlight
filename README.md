@@ -27,6 +27,23 @@ Open the app, and you can:
 7. Press **Land** and watch it descend and auto-disarm.
 8. The entire run is saved locally to SQLite (`backend/vantaflight.db`).
 
+And autonomously:
+
+9. Pick a **Square**, **Orbit** or **Survey** pattern (or edit waypoints) in the
+   **Mission** panel, see the distance, time and battery estimate, and press
+   **Start mission**. The drone takes off, flies the plan, and comes home.
+10. If the battery runs low, the aircraft leaves the geofence, or telemetry
+    goes stale, a **failsafe** returns it home, lands it, or holds it, and
+    the UI shows why. Rehearse each one from **Sim Lab → Failsafe Rehearsal**.
+
+11. Mark **no-fly zones**, then press **Optimize route**: VantaFlight finds the
+    shortest safe order and path through your stops, flies around the zones,
+    and warns you if any stop is past the battery's point of no return.
+    Export the result as a QGroundControl `.plan`, or import one.
+
+See [docs/MISSIONS.md](docs/MISSIONS.md) and [docs/ROUTING.md](docs/ROUTING.md)
+for the details.
+
 Safety rules reject invalid commands (e.g. takeoff while disconnected, takeoff
 before arming, disarm while airborne) and the UI recovers cleanly from a
 simulated connection loss.
@@ -42,6 +59,9 @@ vantaflight/
 │       ├── adapters/mock.py     MockDroneAdapter (simulated physics)
 │       ├── connection/manager.py ConnectionManager (discovery + lifecycle)
 │       ├── safety/validator.py  Command safety rules
+│       ├── safety/failsafe.py   Automatic battery/geofence/link failsafes
+│       ├── mission/             Waypoint plans, checks, patterns, runner, QGC files
+│       ├── routing/             No-fly zones, safe paths, route optimizer
 │       ├── data/database.py     SQLite (WAL) local persistence
 │       ├── core/flight_controller.py  Orchestrator
 │       ├── vision/              Camera, detection, pose, tracking, fusion
@@ -104,11 +124,13 @@ python -m pytest
 
 Covers connect/disconnect, arm/disarm, takeoff/hold/land, invalid-command
 rejection, telemetry, SQLite recording, simulated connection loss, and
-reconnect, plus the HTTP/WebSocket API.
+reconnect, missions, failsafes, PX4 coordinate conversion, plus the
+HTTP/WebSocket API.
 
-Frontend type checking:
+Frontend type checking and tests:
 
 ```bash
 cd frontend
 npm run typecheck
+npm test
 ```

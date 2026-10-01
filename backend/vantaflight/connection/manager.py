@@ -9,7 +9,7 @@ from ..adapters import DroneAdapter, HopperAdapter, MockDroneAdapter, PX4SITLAda
 from ..adapters.hopper import HopperConfig
 from ..config import PX4_SITL_URL
 from ..mavlink import MAVLinkConfig
-from ..models import AdapterType
+from ..models import AdapterType, Capabilities
 
 
 class TransportType(str, Enum):
@@ -87,6 +87,10 @@ class ConnectionManager:
             cfg.camera.base_url = drone.address
             return HopperAdapter(config=cfg)
         raise NotImplementedError(f"transport {drone.transport.value} is not supported yet")
+
+    def capabilities_for(self, drone: DiscoveredDrone) -> Capabilities:
+        """Describe a discovered drone without connecting to it."""
+        return self._build_adapter(drone).get_capabilities()
 
     async def connect(self, drone: DiscoveredDrone | None = None) -> DroneAdapter:
         if drone is None:

@@ -5,7 +5,7 @@ import time
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FlightMode(str, Enum):
@@ -13,6 +13,10 @@ class FlightMode(str, Enum):
     TAKEOFF = "TAKEOFF"
     HOLD = "HOLD"
     LANDING = "LANDING"
+    #: Flying toward a commanded waypoint (mission leg or goto).
+    MISSION = "MISSION"
+    #: Flying home before landing (return-to-launch).
+    RETURNING = "RETURNING"
 
 
 class ConnectionQuality(str, Enum):
@@ -54,6 +58,9 @@ class Telemetry(BaseModel):
     altitude_available: bool = True
     velocity_available: bool = True
     position_available: bool = True
+    #: Seconds since the last message actually received from the aircraft.
+    #: 0 for adapters that always have fresh state (the simulator).
+    link_age_s: float = 0.0
 
     @property
     def airborne(self) -> bool:
@@ -83,6 +90,10 @@ class Capabilities(BaseModel):
     supports_camera: bool = False
     is_simulated: bool = True
     max_altitude_m: float = 120.0
+    #: Can fly to a local (x, y, altitude) position — required for missions.
+    supports_goto: bool = False
+    #: Has a native return-to-launch behaviour.
+    supports_return: bool = False
     supported_capabilities: list[str] = Field(default_factory=list)
     capability_map: dict[str, CapabilityStatus] = Field(default_factory=dict)
 
@@ -109,6 +120,14 @@ class CommandResult(BaseModel):
     status: CommandStatus = CommandStatus.SENT
     message: str = ""
     timestamp: float = Field(default_factory=time.time)
+
+    @model_validator(mode="after")
+    def _refused_is_never_sent(self) -> "CommandResult":
+        # A refused command that does not say what happened to it must not
+        # inherit the SENT default: the audit trail would claim a transmission.
+        if not self.accepted and "status" not in self.model_fields_set:
+            self.status = CommandStatus.REJECTED
+        return self
 
     @classmethod
     def ok(cls, command: str, msg: str = "") -> "CommandResult":
