@@ -3,15 +3,16 @@
 VantaFlight is a **local-first** autonomous competition drone software platform.
 It runs entirely on your machine — no internet, no cloud, no accounts required.
 
-This repository contains the drone-agnostic Flight Core, mock/PX4 SITL
-adapters, Digital Twin, V0.5 backend-intelligence packages, and the existing
-desktop dashboard. V0.5 adds deterministic vision, racing-planner, procedural
-course, analysis, and asynchronous recording foundations without redesigning
-the desktop UI.
+**Version 1.0.0.** This repository contains the drone-agnostic Flight Core,
+mock, PX4 SITL and Hopper adapters, autonomous missions with failsafes, a
+routing engine, the live Digital Twin, VantaForge course generation, training
+and evolution, replay, and the desktop app (browser or Tauri AppImage/.deb).
+See [docs/STATUS.md](docs/STATUS.md) for what is verified at which level.
 
-> Safety: V0.5 autonomous racing is simulation-only. VantaFlight emits
-> normalized trajectory/setpoint models, never raw motor PWM. PX4 remains
-> responsible for stabilization and motor control.
+> Safety: autonomous flight is simulation-only. VantaFlight emits normalized
+> trajectory/setpoint models, never raw motor PWM. PX4 remains responsible for
+> stabilization and motor control. Hopper is observe-only: live control stays
+> disabled until FTW publishes a control interface.
 
 ## What works today
 
@@ -44,6 +45,18 @@ And autonomously:
 See [docs/MISSIONS.md](docs/MISSIONS.md) and [docs/ROUTING.md](docs/ROUTING.md)
 for the details.
 
+And in the other workspaces:
+
+12. **Mission**: plan and fly waypoint missions and save typed missions
+    (search & rescue, delivery, inspection, race) that survive restarts.
+13. **Twin**: the live Digital Twin, with the actual and planned path,
+    zones and geofence, in 3D, top or side view.
+14. **VantaForge**: generate a race course in a safe volume, inspect its
+    stats, projections and difficulty, and train on that course type.
+15. **Evolution**: see where the autonomy stack fails most across training
+    runs, and check whether a challenger really beats the champion.
+16. **Replay** any recorded flight frame by frame.
+
 Safety rules reject invalid commands (e.g. takeoff while disconnected, takeoff
 before arming, disarm while airborne) and the UI recovers cleanly from a
 simulated connection loss.
@@ -70,7 +83,7 @@ vantaflight/
 │       └── main.py              FastAPI HTTP + WebSocket server
 ├── frontend/                    Desktop UI (React, TypeScript, Vite)
 │   ├── src/                     App, telemetry stream, controls, timeline
-│   └── src-tauri/               Tauri packaging scaffold (not yet built)
+│   └── src-tauri/               Tauri desktop app (AppImage, .deb)
 └── scripts/install.sh           One-shot local setup
 ```
 
@@ -80,7 +93,7 @@ that one contract — nothing else changes.
 
 ## Running VantaFlight locally (Linux / Chromebook Linux)
 
-You need Python 3.10+ and Node.js 20+ (Node 22 recommended for full test suite).
+You need Python 3.10+ and Node.js 20.19+ or 22.12+.
 
 ### 1. Install dependencies
 
@@ -113,6 +126,27 @@ and WebSocket traffic to the Flight Core automatically.
 
 Then: **Connect → Arm → Takeoff → Hold → Land**. Every run is recorded to
 `backend/vantaflight.db`.
+
+### Desktop app
+
+Build the AppImage and `.deb` (needs Rust and the Tauri system packages,
+`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`):
+
+```bash
+cd frontend
+npx tauri build
+sudo apt install ./src-tauri/target/release/bundle/deb/VantaFlight_1.0.0_amd64.deb
+```
+
+The app starts and stops its own Flight Core; the first launch sets up a
+Python venv in `~/.local/share/com.vantaflight.app` (it needs `python3-venv`).
+Uninstall with `sudo apt remove vantaflight`; your flights stay in that folder.
+
+### PX4 SITL
+
+See [docs/PX4.md](docs/PX4.md). `pip install -r backend/requirements-px4.txt`,
+start PX4 SITL, pick **PX4 SITL** in the adapter selector, and connect.
+`simulation/px4/e2e_flight.py` flies the whole path end to end.
 
 ## Tests
 

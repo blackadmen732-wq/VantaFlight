@@ -41,12 +41,12 @@ def validate_sitl_address(address: str) -> None:
     parsed = urlsplit(address)
     if parsed.scheme not in {"udp", "udpin", "udpout"}:
         raise PhysicalMAVLinkBlocked(
-            "V0.5 autonomous control is simulation-only; only UDP SITL is allowed"
+            "Autonomous control is simulation-only; only UDP SITL is allowed"
         )
     host = parsed.hostname
     if host not in {None, "", "0.0.0.0", "127.0.0.1", "::", "::1", "localhost"}:
         raise PhysicalMAVLinkBlocked(
-            "V0.5 autonomous control cannot connect to a non-local MAVLink host"
+            "Autonomous control cannot connect to a non-local MAVLink host"
         )
     try:
         port = parsed.port
@@ -54,5 +54,5 @@ def validate_sitl_address(address: str) -> None:
         raise PhysicalMAVLinkBlocked("invalid SITL MAVLink endpoint") from exc
     if port is None or not 14540 <= port <= 14580:
         raise PhysicalMAVLinkBlocked(
-            "V0.5 autonomous control requires a PX4 SITL UDP port in 14540..14580"
+            "Autonomous control requires a PX4 SITL UDP port in 14540..14580"
         )

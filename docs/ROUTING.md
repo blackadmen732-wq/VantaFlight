@@ -1,4 +1,4 @@
-# Routing Engine (V0.4)
+# Routing Engine
 
 **The problem it solves:** you know the places the drone has to visit and the
 places it must never fly over. You want the shortest route that visits them

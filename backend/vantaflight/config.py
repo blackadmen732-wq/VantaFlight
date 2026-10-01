@@ -26,6 +26,10 @@ CORS_ORIGINS: list[str] = _csv(
     )
 )
 
+# Built frontend (``frontend/dist``) to serve from the backend itself, as the
+# desktop app does. Unset in development, where Vite serves the UI.
+FRONTEND_DIST: str | None = os.environ.get("VANTAFLIGHT_FRONTEND_DIST") or None
+
 DEFAULT_ADAPTER: str = os.environ.get("VANTAFLIGHT_ADAPTER", "mock")
 
 PX4_SITL_URL: str = os.environ.get(

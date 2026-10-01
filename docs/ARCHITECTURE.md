@@ -1,4 +1,4 @@
-# VantaFlight Architecture (V0.5)
+# VantaFlight Architecture (1.0.0)
 
 ## Overview
 
@@ -6,16 +6,17 @@ VantaFlight is a local-first drone simulation and control platform. It runs
 entirely on one machine with no cloud dependency. The system connects to
 either a built-in mock adapter or a PX4 SITL instance via MAVLink.
 
-V0.5 preserves the V0.3 Flight Core and adds backend-intelligence packages
-around it. Perception and planning consume normalized models and never bypass
+1.0.0 keeps the V0.3 Flight Core at the centre and layers missions, routing,
+failsafes, the Hopper adapter, training, replay, Digital Twin 2.0 and
+evolution around it. Perception and planning consume normalized models and never bypass
 the adapter, safety, or PX4 stabilization boundaries.
 
 ## System Layers
 
 ```
 ┌──────────────────────────────────────┐
-│           React Dashboard            │  TypeScript / Vite
-│  (controls, twin view, sim lab)      │  Port 5173
+│   React UI (browser or Tauri app)    │  TypeScript / Vite
+│ flight, mission, twin, forge, evol.  │  :5173 dev, served by :8000 in app
 ├──────────────────────────────────────┤
 │          FastAPI + WebSocket         │  Python / Uvicorn
 │     (REST commands, telemetry WS)    │  Port 8000
@@ -40,7 +41,7 @@ the adapter, safety, or PX4 stabilization boundaries.
 └──────────────────────────────────────┘
 ```
 
-## V0.5 Intelligence Pipeline
+## Intelligence Pipeline (from V0.5)
 
 ```
 CameraManager ─┬─ latest FramePacket → VantaFrame → VantaDetect → VantaPose
@@ -160,3 +161,23 @@ docs/                 # Project documentation
 7. Failsafe guardian checks the sample; mission runner advances
 8. SQLite records telemetry samples, commands (with their source) and events
 9. On disconnect, a run summary is computed and available via REST
+
+
+## Desktop app (Tauri)
+
+`frontend/src-tauri` packages VantaFlight as an AppImage and a `.deb`. The
+window opens a splash page while the Rust shell brings up the Flight Core:
+
+1. If a VantaFlight backend already answers `/api/health` on port 8000
+   (`VANTAFLIGHT_PORT`), the app uses it and leaves it running on exit.
+2. Otherwise it creates a private venv in the app data folder
+   (`~/.local/share/com.vantaflight.app/venv`) on first launch, or when an
+   update changes `requirements.txt`, then starts uvicorn from the bundled
+   backend with `VANTAFLIGHT_FRONTEND_DIST` pointing at the bundled UI and
+   `VANTAFLIGHT_DB` in the same folder.
+3. Once healthy, the window navigates to `http://127.0.0.1:8000/`, so the UI
+   talks to the API same-origin exactly as in a browser.
+4. On exit the shell stops the backend it started.
+
+Flights, the database and `backend.log` live in the app data folder and survive
+updates and uninstalls.

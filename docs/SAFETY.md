@@ -2,9 +2,12 @@
 
 ## Scope
 
-VantaFlight V0.5 autonomous behavior is intended exclusively for simulation.
+VantaFlight 1.0.0 autonomous behavior is intended exclusively for simulation.
 The PX4 adapter connects through MAVSDK only after its configuration passes a
-technical SITL guard. V0.5 does not support physical autonomous execution.
+technical SITL guard. VantaFlight does not support physical autonomous
+execution. The Hopper adapter is observe-only (camera, and telemetry only when
+an official interface exposes real values); live Hopper control stays disabled
+because FTW's control protocol is not documented.
 
 ## Safety Boundaries
 
@@ -19,7 +22,7 @@ technical SITL guard. V0.5 does not support physical autonomous execution.
 - GPS receivers or other sensors
 - Raw motor PWM or mixer output
 
-### V0.5 Autonomous Boundary
+### Autonomous Boundary
 
 - `MAVLinkConfig` rejects serial devices, remote hosts, non-UDP schemes, and
   ports outside `14540..14580` before MAVSDK can connect.
@@ -28,10 +31,11 @@ technical SITL guard. V0.5 does not support physical autonomous execution.
 - VantaRace produces desired position, velocity, acceleration, and yaw only.
 - PX4 remains responsible for stabilization, attitude control, mixing, and
   motor output.
-- No V0.5 autonomous behavior is hardware verified.
+- No autonomous behavior is hardware verified.
 
-The execution guard is required at the future offboard integration point.
-V0.5 deliberately does not implement PX4 offboard trajectory execution.
+`VantaExecution` converts VantaRace output to PX4 offboard setpoints only
+behind this guard. The desktop app does not start the racing loop against
+PX4; waypoint missions use PX4's own `goto_location` and RTL.
 
 ## Session Safety
 
@@ -79,7 +83,7 @@ recorded in the flight log.
 - Telemetry samples are written with timestamps
 - Run summaries are computed from recorded data
 - Schema migrations are applied safely on startup
-- V0.5 schema migration is additive and preserves previous flight records
+- Schema migrations are additive and preserve previous flight records
 - Vision/analysis recording uses a bounded queue and batched background writes
 - Raw video remains in external files; SQLite stores metadata references only
 
@@ -105,7 +109,8 @@ implemented:
 - Hardware-in-the-loop safety layer
 - Emergency stop / kill switch
 - Pre-flight checklist enforcement
-- Validation of the V0.4 geofence and battery failsafes against real
-  airframes (battery estimates are tuned to the simulator)
+- Validation of the geofence and battery failsafes against real airframes
+  (they are verified on PX4 SITL; battery estimates are tuned to the
+  simulator)
 - Operator authentication
 - Regulatory compliance verification

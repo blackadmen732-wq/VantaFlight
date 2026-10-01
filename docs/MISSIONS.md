@@ -1,4 +1,4 @@
-# Missions, Failsafes, and Link Health (V0.4)
+# Missions, Failsafes, and Link Health
 
 V0.4 turns VantaFlight from "a remote control with a dashboard" into an
 aircraft that can fly a plan on its own and protect itself when something goes

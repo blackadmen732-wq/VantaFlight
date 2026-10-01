@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 BACKEND="$ROOT/backend"
 FRONTEND="$ROOT/frontend"
 
-echo "=== VantaFlight v0.9.0 — Local Startup ==="
+echo "=== VantaFlight v1.0.0 — Local Startup ==="
 
 # Resolve Python — prefer the project venv, fall back to system python3.
 if [ -x "$BACKEND/.venv/bin/python" ]; then

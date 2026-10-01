@@ -33,7 +33,7 @@ from .api_models import (
     TrainingSummaryModel,
     VisionStatusModel,
 )
-from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_VERSION
+from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, FRONTEND_DIST, STREAM_HZ, SOFTWARE_VERSION
 from .connection import ConnectionManager
 from .core import FlightController
 from .course_lab import CourseGenerator, CourseValidator, SafeVolume
@@ -1036,7 +1036,37 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except Exception:
             hub.unregister(ws)
 
+    if FRONTEND_DIST:
+        _serve_frontend(app, FRONTEND_DIST)
+
     return app
+
+
+def _serve_frontend(app: FastAPI, dist_dir: str) -> None:
+    """Serve the built React app from the backend (the desktop app's mode).
+
+    Registered after every API route, so ``/api`` and ``/ws`` always win.
+    Unknown paths get ``index.html`` so client-side routes like ``/mission``
+    survive a reload.
+    """
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+
+    root = Path(dist_dir).resolve()
+    index = root / "index.html"
+    if not index.is_file():
+        logger.warning("VANTAFLIGHT_FRONTEND_DIST=%s has no index.html; UI not served", dist_dir)
+        return
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def frontend(path: str) -> FileResponse:
+        if path.startswith(("api/", "ws/")):
+            raise HTTPException(status_code=404, detail="not found")
+        candidate = (root / path).resolve()
+        if path and candidate.is_file() and candidate.is_relative_to(root):
+            return FileResponse(candidate)
+        return FileResponse(index)
 
 
 app = create_app()

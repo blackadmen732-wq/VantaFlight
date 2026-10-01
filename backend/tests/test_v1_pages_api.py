@@ -107,3 +107,21 @@ def test_evolution_api(tmp_path):
         assert cmp["champion"]["runs"] == 2
 
         assert client.get("/api/evolution/weaknesses", params={"campaign_id": "nope"}).status_code == 404
+
+
+# -- desktop app: backend serves the built UI --------------------------------------
+def test_backend_serves_built_frontend_without_shadowing_api(tmp_path, monkeypatch):
+    import vantaflight.main as main_mod
+
+    (tmp_path / "index.html").write_text("<div id=root></div>")
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "app.js").write_text("console.log(1)")
+    (tmp_path.parent / "secret.txt").write_text("nope")
+    monkeypatch.setattr(main_mod, "FRONTEND_DIST", str(tmp_path))
+    with TestClient(main_mod.create_app(db_path=str(tmp_path / "t.db"))) as client:
+        assert client.get("/").text == "<div id=root></div>"
+        assert client.get("/mission").text == "<div id=root></div>"  # client-side route
+        assert client.get("/assets/app.js").text == "console.log(1)"
+        assert client.get("/api/health").json()["status"] == "ok"
+        assert client.get("/api/no-such-thing").status_code == 404
+        assert "nope" not in client.get("/../secret.txt").text
