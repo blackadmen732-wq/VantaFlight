@@ -88,19 +88,22 @@ class FailsafeGuardian:
         if not (t.connected and t.armed and t.airborne):
             return None
 
-        if t.battery_percentage <= cfg.battery_critical_pct:
+        # Rules only act on measured values: an adapter that cannot report a
+        # battery level or position (unknown, not zero) must not trigger them.
+        battery_known = t.battery_available
+        if battery_known and t.battery_percentage <= cfg.battery_critical_pct:
             return self._fire(
                 "battery_critical", FailsafeAction.LAND,
                 f"battery critical ({t.battery_percentage:.0f}%), landing now",
             )
 
-        if t.battery_percentage <= cfg.battery_low_pct and t.flight_mode not in _RETURNING_OR_LANDING:
+        if battery_known and t.battery_percentage <= cfg.battery_low_pct and t.flight_mode not in _RETURNING_OR_LANDING:
             return self._fire(
                 "battery_low", FailsafeAction.RETURN,
                 f"battery low ({t.battery_percentage:.0f}%), returning home",
             )
 
-        breach = cfg.geofence.violation(t.x, t.y, t.altitude)
+        breach = cfg.geofence.violation(t.x, t.y, t.altitude) if t.position_available else None
         if breach and t.flight_mode not in _RETURNING_OR_LANDING:
             return self._fire(
                 "geofence", FailsafeAction.RETURN, f"geofence breach: {breach}, returning home",

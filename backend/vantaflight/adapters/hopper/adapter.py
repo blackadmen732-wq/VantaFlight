@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from ...models import Capabilities, CapabilityStatus, CommandResult, Telemetry
+from ...models import Capabilities, CapabilityStatus, CommandResult, ConnectionQuality, Telemetry
 from ..base import DroneAdapter
 from .battery import HopperBatteryManager
 from .camera import HopperCameraConnector
@@ -137,6 +137,13 @@ class HopperAdapter(DroneAdapter):
         tel = self._telemetry.get_telemetry()
         if tel.battery_available:
             self._battery.update(tel.battery_percentage)
+        if not tel.connected and self.connected:
+            # Camera-only (observe) sessions have no telemetry link, but the
+            # aircraft *is* connected. Report that, with every measurement
+            # still flagged unavailable, so the flight session stays open.
+            tel = tel.model_copy(
+                update={"connected": True, "connection_quality": ConnectionQuality.POOR}
+            )
         return tel
 
     def get_capabilities(self) -> Capabilities:

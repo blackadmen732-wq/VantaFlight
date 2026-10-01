@@ -90,6 +90,8 @@ class SafetyValidator:
             return SafetyViolation("goto", "cannot fly to a waypoint while disconnected")
         if not t.armed or not t.airborne:
             return SafetyViolation("goto", "take off before flying to a waypoint")
+        if not t.position_available:
+            return SafetyViolation("goto", "aircraft position unknown; cannot fly to a waypoint safely")
         if altitude < 1.0:
             return SafetyViolation("goto", "waypoint altitude must be at least 1 m")
         breach = self.geofence.violation(x, y, altitude)

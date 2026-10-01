@@ -44,6 +44,18 @@ class Waypoint:
     hold_s: float = 0.0
     label: str = ""
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "Waypoint":
+        return cls(
+            x=float(d.get("x", 0.0)),
+            y=float(d.get("y", 0.0)),
+            z=float(d.get("z", 0.0)),
+            speed_m_s=float(d.get("speed_m_s", 5.0)),
+            heading_deg=d.get("heading_deg"),
+            hold_s=float(d.get("hold_s", 0.0)),
+            label=str(d.get("label", "")),
+        )
+
     def to_dict(self) -> dict:
         return {
             "x": round(self.x, 3),
@@ -65,6 +77,18 @@ class MissionGoal:
     return_home: bool = True
     max_duration_s: float = 600.0
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "MissionGoal":
+        target = d.get("delivery_target")
+        return cls(
+            description=str(d.get("description", "")),
+            waypoints=tuple(Waypoint.from_dict(w) for w in d.get("waypoints", [])),
+            search_area=tuple(tuple(float(v) for v in p) for p in d.get("search_area", [])),
+            delivery_target=tuple(float(v) for v in target) if target else None,
+            return_home=bool(d.get("return_home", True)),
+            max_duration_s=float(d.get("max_duration_s", 600.0)),
+        )
 
     def to_dict(self) -> dict:
         return {

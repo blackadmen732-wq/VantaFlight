@@ -271,7 +271,11 @@ class FlightController:
     ) -> RoutePlan:
         """Best safe route through ``stops`` with a battery budget (live level if connected)."""
         telemetry = self.get_telemetry()
-        battery = telemetry.battery_percentage if telemetry.connected else None
+        battery = (
+            telemetry.battery_percentage
+            if telemetry.connected and telemetry.battery_available
+            else None
+        )
         kwargs = {"speed_m_s": speed_m_s} if speed_m_s else {}
         return plan_route(
             stops, self._airspace, optimize_order=optimize_order, finish=finish,
@@ -336,7 +340,11 @@ class FlightController:
     def check_mission(self, plan: MissionPlan) -> dict:
         """Validate a plan against the geofence, airspace and live battery level."""
         telemetry = self.get_telemetry()
-        battery = telemetry.battery_percentage if telemetry.connected else None
+        battery = (
+            telemetry.battery_percentage
+            if telemetry.connected and telemetry.battery_available
+            else None
+        )
         return check_plan(plan, self._geofence, battery_pct=battery, airspace=self._airspace).to_dict()
 
     async def start_mission(self, plan: MissionPlan) -> CommandResult:

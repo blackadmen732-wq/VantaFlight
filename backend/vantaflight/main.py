@@ -113,6 +113,25 @@ class ExportRequest(BaseModel):
     include_airspace: bool = True
 
 
+# Request bodies must be module-level: with postponed annotations FastAPI
+# cannot resolve classes defined inside create_app() and treats them as
+# required query parameters (every request then fails with 422).
+class CreateMissionRequest(BaseModel):
+    mission_type: str = "RACE"
+    description: str = ""
+    waypoints: list[dict] = Field(default_factory=list)
+    search_area: list[list[float]] = Field(default_factory=list)
+    delivery_target: list[float] | None = None
+    return_home: bool = True
+    max_duration_s: float = 600.0
+
+class ReplaySeekRequest(BaseModel):
+    time_offset: float = 0.0
+
+class ReplaySpeedRequest(BaseModel):
+    speed: float = 1.0
+
+
 class ConnectionHub:
     """Tracks connected WebSocket clients and broadcasts JSON frames."""
 
@@ -186,11 +205,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def _persist_training_run(result) -> None:
         try:
             status = "completed" if result.success else "failed"
+            # Training generates its courses on the fly, so there is no row in
+            # `courses` to reference: the mode goes in metadata, and the
+            # nullable course_id foreign key stays unset.
             db.start_simulation_run(
                 result.run_id,
-                course_id=result.config.course_mode,
+                course_id=None,
                 metadata={
                     "campaign_id": result.campaign_id,
+                    "course_mode": str(getattr(result.config.course_mode, "value", result.config.course_mode)),
                     "seed": result.config.seed,
                     "gate_count": result.config.gate_count,
                     "gates_passed": result.gates_passed,
@@ -203,7 +226,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
             db.finish_simulation_run(result.run_id, status)
         except Exception:
-            pass
+            # Training must keep running, but a lost run is never silent.
+            logger.exception("failed to persist training run %s", result.run_id)
 
     training_engine.set_run_callback(_persist_training_run)
 
@@ -214,6 +238,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     autonomy_loop = AutonomyLoop()
     twin_builder = TwinSnapshotBuilder()
     mission_registry = MissionRegistry()
+    _stored_missions = db.list_missions_db(limit=-1)
+    mission_registry.restore(_stored_missions)
+    for _row in _stored_missions:
+        if _row.get("status") in ("ACTIVE", "PAUSED"):
+            # Interrupted by the previous shutdown: record it as aborted.
+            db.update_mission_status(_row["mission_id"], "ABORTED", phase="ABORT")
     _twin_snapshot: dict = {"ref": TwinWorldSnapshot(timestamp=0.0, sequence=0)}
     app.state.db = db
     app.state.supervisor = supervisor
@@ -629,15 +659,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return _twin_snapshot["ref"].to_dict()
 
     # -- Mission architecture --------------------------------------------------
-    class CreateMissionRequest(BaseModel):
-        mission_type: str = "RACE"
-        description: str = ""
-        waypoints: list[dict] = []
-        search_area: list[list[float]] = []
-        delivery_target: list[float] | None = None
-        return_home: bool = True
-        max_duration_s: float = 600.0
-
     @app.post("/api/missions")
     async def create_mission(req: CreateMissionRequest) -> dict:
         try:
@@ -761,7 +782,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         checks["python"] = {
             "version": sys.version,
-            "ok": sys.version_info >= (3, 11),
+            "ok": sys.version_info >= (3, 10),
         }
 
         for pkg_name, import_name in [
@@ -916,16 +937,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
         replay_player.stop()
         return replay_player.to_dict()
 
-    class ReplaySeekRequest(BaseModel):
-        time_offset: float = 0.0
-
     @app.post("/api/replay/seek")
     async def replay_seek(req: ReplaySeekRequest) -> dict:
         replay_player.seek(req.time_offset)
         return replay_player.to_dict()
-
-    class ReplaySpeedRequest(BaseModel):
-        speed: float = 1.0
 
     @app.post("/api/replay/speed")
     async def replay_speed(req: ReplaySpeedRequest) -> dict:
