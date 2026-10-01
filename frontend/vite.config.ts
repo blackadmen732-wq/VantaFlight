@@ -7,6 +7,14 @@ const BACKEND = process.env.VANTAFLIGHT_BACKEND ?? "http://127.0.0.1:8000";
 // Core so the browser talks to a single origin during development.
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        // Keep the 3D engine in its own cacheable chunk.
+        manualChunks: { three: ["three"], react: ["react", "react-dom", "react-router-dom"] },
+      },
+    },
+  },
   server: {
     host: "127.0.0.1",
     port: 5173,

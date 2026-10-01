@@ -8,6 +8,10 @@ import type {
   CommandResult,
   CourseDetail,
   CourseGenerationRequest,
+  CourseValidation,
+  EvolutionComparison,
+  GoalMission,
+  GoalMissionType,
   Diagnostics,
   DiscoveredDrone,
   FailsafeStatus,
@@ -34,8 +38,10 @@ import type {
   TrainingRunResult,
   TrainingSummary,
   TwinState,
+  TwinWorldSnapshot,
   VisionStatus,
   Waypoint,
+  Weakness,
   WsFrame,
   ZoneSpec,
 } from "./types";
@@ -53,14 +59,14 @@ function describeError(data: unknown, status: number): string {
   }
   if (typeof detail === "string") return detail;
   if (typeof body?.message === "string") return body.message;
-  return `request failed (${status})`;
+  return `request failed: ${status}`;
 }
 
 async function parseError(res: Response): Promise<Error> {
   try {
     return new Error(describeError(await res.json(), res.status));
   } catch {
-    return new Error(`request failed (${res.status})`);
+    return new Error(`request failed: ${res.status}`);
   }
 }
 
@@ -205,6 +211,40 @@ export const api = {
   autoCurriculum: (config: Record<string, unknown>) =>
     postJson<Record<string, unknown>>("/api/training/auto-curriculum", config),
   faultProfiles: () => get<Record<string, FaultProfileInfo>>("/api/training/fault-profiles"),
+
+  twinSnapshot: () => get<TwinWorldSnapshot>("/api/twin/snapshot"),
+  validateCourse: (courseId: string) =>
+    get<CourseValidation>(`/api/courses/${encodeURIComponent(courseId)}/validation`),
+
+  missions: {
+    list: () => get<{ missions: GoalMission[] }>("/api/missions").then((r) => r.missions),
+    create: (req: {
+      mission_type: GoalMissionType;
+      description: string;
+      waypoints?: Array<{ x: number; y: number; z: number; speed_m_s?: number; label?: string }>;
+      search_area?: number[][];
+      delivery_target?: number[] | null;
+      return_home?: boolean;
+      max_duration_s?: number;
+    }) => postJson<GoalMission>("/api/missions", req),
+    start: (id: string) => postJson<GoalMission>(`/api/missions/${encodeURIComponent(id)}/start`),
+    abort: (id: string) => postJson<GoalMission>(`/api/missions/${encodeURIComponent(id)}/abort`),
+  },
+
+  evolution: {
+    weaknesses: (campaignId?: string) =>
+      get<{ run_count: number; weaknesses: Weakness[] }>(
+        campaignId
+          ? `/api/evolution/weaknesses?campaign_id=${encodeURIComponent(campaignId)}`
+          : "/api/evolution/weaknesses",
+      ),
+    compare: (championId: string, challengerId: string, metric = "utility") =>
+      postJson<EvolutionComparison>("/api/evolution/compare", {
+        champion_campaign_id: championId,
+        challenger_campaign_id: challengerId,
+        metric,
+      }),
+  },
 };
 
 export function openTelemetryStream(

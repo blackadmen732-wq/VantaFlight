@@ -41,6 +41,14 @@ export interface Telemetry {
   ground_speed?: number;
   /** Seconds since the last message actually received from the aircraft. */
   link_age_s?: number;
+  /**
+   * Availability flags: false means the value is a placeholder, not a
+   * measurement (e.g. a camera-only Hopper has no battery or position).
+   */
+  battery_available?: boolean;
+  altitude_available?: boolean;
+  velocity_available?: boolean;
+  position_available?: boolean;
 }
 
 export interface FlightEvent {
@@ -409,7 +417,9 @@ export type WsFrame =
   | { type: "race_state"; data: RaceStateFrame }
   | { type: "simulation_state"; data: SimulationState }
   | { type: "run_metric"; data: RunMetric }
-  | { type: "mission"; data: MissionStatus };
+  | { type: "mission"; data: MissionStatus }
+  | { type: "autonomy_state"; data: AutonomyState }
+  | { type: "twin_snapshot"; data: TwinWorldSnapshot };
 
 export interface RuntimeState {
   overall: string;
@@ -558,3 +568,103 @@ export const DISCONNECTED: Telemetry = {
   battery_percentage: 0,
   connection_quality: "NONE",
 };
+
+// -- Digital Twin 2.0 snapshot (backend digital_twin/primitives.py) -----------
+export type TwinLayer = "TRUTH" | "ESTIMATED" | "DESIRED" | "ACTUAL";
+export type Vec3 = [number, number, number];
+
+interface PrimitiveBase {
+  layer: TwinLayer;
+  color?: string;
+}
+
+export type TwinPrimitive =
+  | (PrimitiveBase & { kind: "POINT"; x: number; y: number; z: number; label: string; radius: number })
+  | (PrimitiveBase & {
+      kind: "POSE"; x: number; y: number; z: number;
+      yaw_deg: number; pitch_deg: number; roll_deg: number; label: string;
+    })
+  | (PrimitiveBase & { kind: "VECTOR"; origin: number[]; direction: number[]; label: string })
+  | (PrimitiveBase & { kind: "PATH"; points: number[][]; label: string; closed: boolean })
+  | (PrimitiveBase & {
+      kind: "GATE"; gate_id: string; position: number[]; normal: number[];
+      width: number; height: number; passed: boolean;
+    })
+  | (PrimitiveBase & { kind: "ENVELOPE"; center: number[]; radii: number[]; label: string; opacity: number })
+  | (PrimitiveBase & { kind: "TEXT"; position: number[]; text: string; size: number })
+  | (PrimitiveBase & { kind: "REGION"; vertices: number[][]; label: string; opacity: number });
+
+export interface TwinAircraft {
+  position: number[];
+  velocity: number[];
+  yaw_deg: number;
+  pitch_deg: number;
+  roll_deg: number;
+  layer: TwinLayer;
+}
+
+export interface TwinWorldSnapshot {
+  timestamp: number;
+  sequence: number;
+  aircraft: Partial<Record<TwinLayer, TwinAircraft>>;
+  primitives: TwinPrimitive[];
+  errors: Array<{ name: string; value: number; unit: string }>;
+  autonomy_state: string;
+  race_time_s: number;
+  gates_passed: number;
+  total_gates: number;
+}
+
+// -- V0.9 typed missions (mission/models.py) ----------------------------------
+export type GoalMissionType = "RACE" | "SEARCH_RESCUE" | "PACKAGE_DELIVERY" | "EMERGENCY_RESPONSE";
+
+export interface GoalMission {
+  mission_id: string;
+  mission_type: GoalMissionType;
+  goal: {
+    description: string;
+    waypoints: Array<{ x: number; y: number; z: number; speed_m_s: number; label: string }>;
+    search_area: number[][];
+    delivery_target: number[] | null;
+    return_home: boolean;
+    max_duration_s: number;
+  };
+  status: "PENDING" | "ACTIVE" | "PAUSED" | "COMPLETE" | "ABORTED" | "FAILED";
+  phase: string;
+  elapsed_s: number;
+  waypoints_reached: number;
+}
+
+export interface CourseValidation {
+  course_id: string;
+  valid: boolean;
+  errors: string[];
+  warnings?: string[];
+}
+
+// -- Evolution (evolution/training_bridge.py) ---------------------------------
+export interface Weakness {
+  mission: string;
+  condition: string;
+  failure_rate: number;
+  severity: number;
+  sample_count: number;
+  priority: number;
+  top_causes: Array<{ category: string; count: number }>;
+}
+
+export interface CandidateScore {
+  name: string;
+  runs: number;
+  success_rate: number;
+  mean_score: number;
+  worst_score: number;
+}
+
+export interface EvolutionComparison {
+  promote: boolean;
+  reason: string;
+  metric: string;
+  champion: CandidateScore;
+  challenger: CandidateScore;
+}
