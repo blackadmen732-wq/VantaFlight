@@ -40,4 +40,40 @@ TELEMETRY_STALE_TIMEOUT: float = float(
     os.environ.get("VANTAFLIGHT_TELEMETRY_STALE_TIMEOUT", "3.0")
 )
 
-SOFTWARE_VERSION: str = "0.3.0"
+# -- safety envelope & failsafes ---------------------------------------------
+# Horizontal distance from home (metres) the aircraft may never exceed.
+GEOFENCE_RADIUS_M: float = float(os.environ.get("VANTAFLIGHT_GEOFENCE_RADIUS_M", "150"))
+
+# Altitude ceiling above home (metres).
+GEOFENCE_MAX_ALTITUDE_M: float = float(
+    os.environ.get("VANTAFLIGHT_GEOFENCE_MAX_ALT_M", "100")
+)
+
+# Battery level that triggers an automatic return-to-launch.
+BATTERY_LOW_PCT: float = float(os.environ.get("VANTAFLIGHT_BATTERY_LOW_PCT", "25"))
+
+# Battery level that forces an immediate landing wherever the aircraft is.
+BATTERY_CRITICAL_PCT: float = float(
+    os.environ.get("VANTAFLIGHT_BATTERY_CRITICAL_PCT", "12")
+)
+
+# Altitude used when flying home on return-to-launch.
+RTL_ALTITUDE_M: float = float(os.environ.get("VANTAFLIGHT_RTL_ALT_M", "10"))
+
+# -- missions -----------------------------------------------------------------
+# A waypoint counts as reached inside this 3D radius (metres).
+MISSION_ACCEPT_RADIUS_M: float = float(
+    os.environ.get("VANTAFLIGHT_MISSION_ACCEPT_RADIUS_M", "1.0")
+)
+
+MISSION_DEFAULT_SPEED_M_S: float = float(
+    os.environ.get("VANTAFLIGHT_MISSION_SPEED_M_S", "5")
+)
+
+MISSION_MAX_SPEED_M_S: float = float(
+    os.environ.get("VANTAFLIGHT_MISSION_MAX_SPEED_M_S", "15")
+)
+
+MISSION_MAX_WAYPOINTS: int = int(os.environ.get("VANTAFLIGHT_MISSION_MAX_WAYPOINTS", "100"))
+
+SOFTWARE_VERSION: str = "0.4.0"

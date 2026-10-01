@@ -1,4 +1,11 @@
-export type FlightMode = "IDLE" | "TAKEOFF" | "HOLD" | "LANDING" | "LAND";
+export type FlightMode =
+  | "IDLE"
+  | "TAKEOFF"
+  | "HOLD"
+  | "LANDING"
+  | "LAND"
+  | "MISSION"
+  | "RETURNING";
 
 export type ConnectionQuality =
   | "NONE"
@@ -32,6 +39,8 @@ export interface Telemetry {
   latitude?: number;
   longitude?: number;
   ground_speed?: number;
+  /** Seconds since the last message actually received from the aircraft. */
+  link_age_s?: number;
 }
 
 export interface FlightEvent {
@@ -64,6 +73,8 @@ export interface Capabilities {
   supports_velocity: boolean;
   supports_heading: boolean;
   supports_battery: boolean;
+  supports_goto?: boolean;
+  supports_return?: boolean;
   supported_capabilities: string[];
 }
 
@@ -115,7 +126,76 @@ export interface Diagnostics {
   adapter: string | null;
   metrics: DiagnosticsMetrics;
   twin_active: boolean;
+  link_age_s?: number;
+  mission_state?: MissionState;
+  failsafe?: FailsafeStatus;
 }
+
+// ── Missions ─────────────────────────────────────────────────
+
+/** Local coordinates: metres east (x) / north (y) of home, metres up. */
+export interface Waypoint {
+  x: number;
+  y: number;
+  altitude: number;
+  hold_s?: number;
+  speed_m_s?: number | null;
+}
+
+export type FinishAction = "land" | "return_home" | "hold";
+
+export interface MissionPlan {
+  name: string;
+  waypoints: Waypoint[];
+  speed_m_s: number;
+  finish: FinishAction;
+}
+
+export type MissionState = "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED" | "ABORTED";
+
+export interface MissionStatus {
+  state: MissionState;
+  phase: "TAKEOFF" | "TRANSIT" | "LOITER" | "DONE";
+  name: string | null;
+  current_index: number;
+  waypoints_reached: number;
+  total_waypoints: number;
+  progress: number;
+  distance_to_target_m: number;
+  elapsed_s: number;
+  message: string;
+  plan: MissionPlan | null;
+}
+
+export interface PlanReport {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  distance_m: number;
+  estimated_duration_s: number;
+  estimated_battery_pct: number;
+}
+
+export type PatternKind = "square" | "orbit" | "survey";
+
+export interface FailsafeTrigger {
+  reason: string;
+  action: "hold" | "return" | "land";
+  message: string;
+}
+
+export interface FailsafeStatus {
+  config: {
+    battery_low_pct: number;
+    battery_critical_pct: number;
+    link_stale_s: number;
+    geofence: { radius_m: number; max_altitude_m: number };
+  };
+  fired: string[];
+  last_trigger: FailsafeTrigger | null;
+}
+
+export type FaultKind = "battery" | "link_stall";
 
 export interface HealthResponse {
   status: string;
@@ -126,7 +206,10 @@ export interface HealthResponse {
 export type WsFrame =
   | { type: "telemetry"; data: Telemetry }
   | { type: "event"; data: FlightEvent }
-  | { type: "twin"; data: TwinState };
+  | { type: "twin"; data: TwinState }
+  | { type: "mission"; data: MissionStatus };
+
+export const ACTIVE_MISSION_STATES: MissionState[] = ["RUNNING", "PAUSED"];
 
 export const DISCONNECTED: Telemetry = {
   timestamp: 0,

@@ -2,9 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { api, openTelemetryStream } from "./api";
 import {
+  ACTIVE_MISSION_STATES,
   DISCONNECTED,
   type AdapterType,
+  type CommandResult,
   type FlightEvent,
+  type MissionPlan,
+  type MissionStatus,
   type RunSummary,
   type Telemetry,
   type TwinState,
@@ -12,10 +16,13 @@ import {
 import AdapterSelector from "./components/AdapterSelector";
 import DigitalTwin from "./components/DigitalTwin";
 import DiagnosticsPanel from "./components/DiagnosticsPanel";
+import MissionPanel from "./components/MissionPanel";
 import RunSummaryCard from "./components/RunSummaryCard";
 import SimulationLab from "./pages/SimulationLab";
 
 const AIRBORNE_EPS = 0.15;
+/** Show the link age once telemetry is older than this (seconds). */
+const LINK_AGE_WARN_S = 1.0;
 
 function FlightDashboard() {
   const [telemetry, setTelemetry] = useState<Telemetry>(DISCONNECTED);
@@ -26,6 +33,9 @@ function FlightDashboard() {
   const [adapter, setAdapter] = useState<AdapterType>("mock");
   const [runSummary, setRunSummary] = useState<RunSummary | null>(null);
   const [showDiag, setShowDiag] = useState(false);
+  const [mission, setMission] = useState<MissionStatus | null>(null);
+  const [draftPlan, setDraftPlan] = useState<MissionPlan | null>(null);
+  const [failsafe, setFailsafe] = useState<FlightEvent | null>(null);
   const seen = useRef(new Set<string>());
 
   const pushEvent = useCallback((ev: FlightEvent) => {
@@ -42,16 +52,22 @@ function FlightDashboard() {
         if (!frame.data.connected) setTwin(null);
       } else if (frame.type === "twin") {
         setTwin(frame.data);
+      } else if (frame.type === "mission") {
+        setMission(frame.data);
       } else {
         pushEvent(frame.data);
+        if (frame.data.event_type === "failsafe") setFailsafe(frame.data);
       }
     }, setStreamOnline);
   }, [pushEvent]);
 
-  const run = async (fn: () => Promise<{ accepted: boolean; message: string; command: string }>) => {
-    setBusy(true);
-    try {
-      const res = await fn();
+  // Pick up a mission already in progress (e.g. after a page reload).
+  useEffect(() => {
+    api.mission.status().then(setMission).catch(() => {});
+  }, []);
+
+  const reportResult = useCallback(
+    (res: CommandResult) => {
       if (!res.accepted) {
         pushEvent({
           timestamp: Date.now() / 1000,
@@ -59,6 +75,14 @@ function FlightDashboard() {
           message: `${res.command} rejected: ${res.message}`,
         });
       }
+    },
+    [pushEvent],
+  );
+
+  const run = async (fn: () => Promise<CommandResult>) => {
+    setBusy(true);
+    try {
+      reportResult(await fn());
     } finally {
       setBusy(false);
     }
@@ -66,7 +90,11 @@ function FlightDashboard() {
 
   const handleConnect = async () => {
     const result = await api.connect(adapter);
-    if (result.accepted) setRunSummary(null);
+    if (result.accepted) {
+      setRunSummary(null);
+      setFailsafe(null);
+      setMission(null);
+    }
     return result;
   };
 
@@ -85,6 +113,9 @@ function FlightDashboard() {
   const connected = telemetry.connected;
   const armed = telemetry.armed;
   const airborne = connected && telemetry.altitude > AIRBORNE_EPS;
+  const linkAge = telemetry.link_age_s ?? 0;
+  const missionActive = mission !== null && ACTIVE_MISSION_STATES.includes(mission.state);
+  const twinPlan = missionActive ? mission.plan : draftPlan;
 
   return (
     <>
@@ -104,6 +135,16 @@ function FlightDashboard() {
 
       {showDiag && <DiagnosticsPanel wsConnected={streamOnline} />}
 
+      {failsafe && (
+        <div className="failsafe-banner" role="alert">
+          <strong>FAILSAFE</strong>
+          <span>{failsafe.message}</span>
+          <button className="icon-btn" aria-label="dismiss failsafe" onClick={() => setFailsafe(null)}>
+            &times;
+          </button>
+        </div>
+      )}
+
       {runSummary && (
         <RunSummaryCard summary={runSummary} onDismiss={() => setRunSummary(null)} />
       )}
@@ -118,7 +159,14 @@ function FlightDashboard() {
               {streamOnline ? "SEARCHING FOR AIRCRAFT" : "DISCONNECTED"}
             </span>
           )}
-          <span className="quality-badge">{telemetry.connection_quality}</span>
+          <span className={`quality-badge quality-${telemetry.connection_quality.toLowerCase()}`}>
+            {telemetry.connection_quality}
+          </span>
+          {connected && linkAge > LINK_AGE_WARN_S && (
+            <span className="link-age" title="time since the last message from the aircraft">
+              LINK {linkAge.toFixed(1)}s
+            </span>
+          )}
         </div>
 
         <div className="metrics">
@@ -162,10 +210,25 @@ function FlightDashboard() {
         <button className="btn" disabled={busy || !airborne} onClick={() => run(api.land)}>
           LAND
         </button>
+        <button className="btn" disabled={busy || !airborne} onClick={() => run(api.returnHome)}>
+          RETURN HOME
+        </button>
       </section>
 
+      <MissionPanel
+        connected={connected}
+        armed={armed}
+        status={mission}
+        onResult={reportResult}
+        onPlanChange={setDraftPlan}
+      />
+
       <div className="twin-events-layout">
-        <DigitalTwin twin={twin} />
+        <DigitalTwin
+          twin={twin}
+          plan={twinPlan}
+          activeWaypoint={missionActive ? mission.current_index : null}
+        />
 
         <section className="timeline">
           <h2>Event Timeline</h2>
@@ -176,7 +239,7 @@ function FlightDashboard() {
               {events.map((ev, i) => (
                 <li key={i} className={`ev ${ev.event_type}`}>
                   <span className="ts">{formatTime(ev.timestamp)}</span>
-                  <span className="tag">{ev.event_type}</span>
+                  <span className="tag" title={ev.event_type}>{ev.event_type.replace(/_/g, " ")}</span>
                   <span className="msg">{ev.message}</span>
                 </li>
               ))}

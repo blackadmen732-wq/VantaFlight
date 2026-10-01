@@ -136,7 +136,7 @@ class FlightDatabase:
         adapter_type: str = "mock",
         is_simulated: bool = True,
         connection_type: str = "SIMULATED",
-        software_version: str = "0.3.0",
+        software_version: str = "0.4.0",
     ) -> int:
         cur = self._conn.execute(
             "INSERT INTO flights (started_at, drone_id, drone_name, status, "

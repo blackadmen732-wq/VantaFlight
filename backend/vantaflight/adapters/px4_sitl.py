@@ -1,4 +1,10 @@
-"""PX4 SITL adapter — real simulated flight through MAVSDK."""
+"""PX4 SITL adapter — real simulated flight through MAVSDK.
+
+PX4 reports global positions (latitude/longitude). VantaFlight works in local
+ENU metres relative to home, so this adapter converts both ways using a
+flat-earth approximation around the home position — accurate to centimetres
+over the few hundred metres a geofenced flight covers.
+"""
 from __future__ import annotations
 
 import math
@@ -17,8 +23,36 @@ _PX4_MODE_MAP = {
     "TAKEOFF": FlightMode.TAKEOFF,
     "HOLD": FlightMode.HOLD,
     "LAND": FlightMode.LANDING,
-    "RETURN_TO_LAUNCH": FlightMode.LANDING,
+    "RETURN_TO_LAUNCH": FlightMode.RETURNING,
+    "MISSION": FlightMode.MISSION,
 }
+
+EARTH_RADIUS_M = 6_378_137.0
+
+# Telemetry age thresholds (seconds) for link quality grading.
+_QUALITY_BY_AGE = (
+    (0.5, ConnectionQuality.EXCELLENT),
+    (1.0, ConnectionQuality.GOOD),
+    (2.0, ConnectionQuality.FAIR),
+)
+
+
+def local_to_global(
+    x: float, y: float, home_lat: float, home_lon: float
+) -> tuple[float, float]:
+    """Metres east/north of home -> (latitude, longitude) in degrees."""
+    lat = home_lat + math.degrees(y / EARTH_RADIUS_M)
+    lon = home_lon + math.degrees(x / (EARTH_RADIUS_M * math.cos(math.radians(home_lat))))
+    return lat, lon
+
+
+def global_to_local(
+    lat: float, lon: float, home_lat: float, home_lon: float
+) -> tuple[float, float]:
+    """(latitude, longitude) in degrees -> metres (east, north) of home."""
+    y = math.radians(lat - home_lat) * EARTH_RADIUS_M
+    x = math.radians(lon - home_lon) * EARTH_RADIUS_M * math.cos(math.radians(home_lat))
+    return x, y
 
 
 class PX4SITLAdapter:
@@ -63,6 +97,21 @@ class PX4SITLAdapter:
     async def land(self) -> None:
         await self._client.land()
 
+    async def goto(
+        self, x: float, y: float, altitude: float, speed_m_s: float | None = None
+    ) -> None:
+        px4 = self._client.telemetry
+        if px4.home_latitude_deg is None or px4.home_longitude_deg is None:
+            raise MAVSDKError("PX4_NO_HOME", "home position not known yet; wait for GPS lock")
+        lat, lon = local_to_global(x, y, px4.home_latitude_deg, px4.home_longitude_deg)
+        home_alt = px4.home_absolute_altitude_m or 0.0
+        if speed_m_s is not None:
+            await self._client.set_speed(speed_m_s)
+        await self._client.goto_location(lat, lon, home_alt + altitude)
+
+    async def return_home(self) -> None:
+        await self._client.return_to_launch()
+
     def get_telemetry(self) -> Telemetry:
         px4 = self._client.telemetry
         mode = self._map_flight_mode(px4.flight_mode, px4.in_air)
@@ -73,20 +122,28 @@ class PX4SITLAdapter:
             + px4.velocity_down_m_s ** 2
         )
 
-        quality = ConnectionQuality.NONE
-        if self._connected and self._client.connected:
-            quality = ConnectionQuality.EXCELLENT if px4.health_all_ok else ConnectionQuality.GOOD
+        connected = self._connected and self._client.connected
+        now = time.time()
+        link_age = max(0.0, now - px4.last_message_at) if px4.last_message_at else 0.0
+        quality = self._grade_link(connected, link_age, px4.health_all_ok)
 
-        x = px4.longitude_deg if px4.longitude_deg is not None else 0.0
-        y = px4.latitude_deg if px4.latitude_deg is not None else 0.0
+        x = y = 0.0
+        if (
+            px4.latitude_deg is not None and px4.longitude_deg is not None
+            and px4.home_latitude_deg is not None and px4.home_longitude_deg is not None
+        ):
+            x, y = global_to_local(
+                px4.latitude_deg, px4.longitude_deg,
+                px4.home_latitude_deg, px4.home_longitude_deg,
+            )
 
         return Telemetry(
-            timestamp=time.time(),
-            connected=self._connected and self._client.connected,
+            timestamp=px4.last_message_at or now,
+            connected=connected,
             armed=px4.armed,
             flight_mode=mode,
-            x=x,
-            y=y,
+            x=round(x, 3),
+            y=round(y, 3),
             z=px4.relative_altitude_m,
             altitude=px4.relative_altitude_m,
             latitude=px4.latitude_deg,
@@ -96,7 +153,20 @@ class PX4SITLAdapter:
             heading=round(px4.heading_deg, 1),
             battery_percentage=round(px4.battery_remaining_percent, 2),
             connection_quality=quality,
+            link_age_s=round(link_age, 2),
         )
+
+    @staticmethod
+    def _grade_link(connected: bool, link_age: float, health_ok: bool) -> ConnectionQuality:
+        if not connected:
+            return ConnectionQuality.NONE
+        for max_age, quality in _QUALITY_BY_AGE:
+            if link_age <= max_age:
+                # An unhealthy estimator caps the grade at GOOD.
+                if quality == ConnectionQuality.EXCELLENT and not health_ok:
+                    return ConnectionQuality.GOOD
+                return quality
+        return ConnectionQuality.POOR
 
     def get_capabilities(self) -> Capabilities:
         return Capabilities(
@@ -104,8 +174,10 @@ class PX4SITLAdapter:
             adapter_type="px4_sitl",
             is_simulated=True,
             supports_gps=True,
+            supports_goto=True,
+            supports_return=True,
             supported_capabilities=[
-                "arm", "takeoff", "land", "hold",
+                "arm", "takeoff", "land", "hold", "goto", "return_home", "missions",
                 "position", "velocity", "heading",
                 "gps", "battery", "simulation",
             ],

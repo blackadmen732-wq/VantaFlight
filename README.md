@@ -3,13 +3,13 @@
 VantaFlight is a **local-first** autonomous competition drone software platform.
 It runs entirely on your machine — no internet, no cloud, no accounts required.
 
-This repository currently contains the **foundation**: a drone-agnostic flight
-core, a simulated (mock) drone, live telemetry streaming, safety-checked flight
-commands, a simple desktop UI, and local SQLite recording of every flight.
+It contains a drone-agnostic flight core, a simulated drone and a PX4 SITL
+adapter, live telemetry streaming, safety-checked flight commands,
+**autonomous waypoint missions**, **automatic failsafes**, a 3D digital twin,
+a desktop UI, and local SQLite recording of every flight.
 
-> Scope note: this is the stable base. Real drone backends (PX4/ArduPilot),
-> computer vision, digital twin, simulation, competition logic, and packaging
-> are intentionally **not** part of this foundation and will come later.
+> Scope note: VantaFlight is for simulation only. Physical aircraft, computer
+> vision, competition logic, and packaging are not supported yet.
 
 ## What works today
 
@@ -24,6 +24,17 @@ Open the app, and you can:
 6. Press **Hold** to loiter.
 7. Press **Land** and watch it descend and auto-disarm.
 8. The entire run is saved locally to SQLite (`backend/vantaflight.db`).
+
+And autonomously:
+
+9. Pick a **Square**, **Orbit** or **Survey** pattern (or edit waypoints) in the
+   **Mission** panel, see the distance, time and battery estimate, and press
+   **Start mission**. The drone takes off, flies the plan, and comes home.
+10. If the battery runs low, the aircraft leaves the geofence, or telemetry
+    goes stale, a **failsafe** returns it home, lands it, or holds it, and
+    the UI shows why. Rehearse each one from **Sim Lab → Failsafe Rehearsal**.
+
+See [docs/MISSIONS.md](docs/MISSIONS.md) for the details.
 
 Safety rules reject invalid commands (e.g. takeoff while disconnected, takeoff
 before arming, disarm while airborne) and the UI recovers cleanly from a
@@ -40,6 +51,8 @@ vantaflight/
 │       ├── adapters/mock.py     MockDroneAdapter (simulated physics)
 │       ├── connection/manager.py ConnectionManager (discovery + lifecycle)
 │       ├── safety/validator.py  Command safety rules
+│       ├── safety/failsafe.py   Automatic battery/geofence/link failsafes
+│       ├── mission/             Waypoint plans, checks, patterns, runner
 │       ├── data/database.py     SQLite (WAL) local persistence
 │       ├── core/flight_controller.py  Orchestrator
 │       └── main.py              FastAPI HTTP + WebSocket server
@@ -99,11 +112,13 @@ python -m pytest
 
 Covers connect/disconnect, arm/disarm, takeoff/hold/land, invalid-command
 rejection, telemetry, SQLite recording, simulated connection loss, and
-reconnect, plus the HTTP/WebSocket API.
+reconnect, missions, failsafes, PX4 coordinate conversion, plus the
+HTTP/WebSocket API.
 
-Frontend type checking:
+Frontend type checking and tests:
 
 ```bash
 cd frontend
 npm run typecheck
+npm test
 ```

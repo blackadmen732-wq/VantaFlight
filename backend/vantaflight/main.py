@@ -3,18 +3,27 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_VERSION
-from .connection import ConnectionManager, DiscoveredDrone
+from .connection import ConnectionManager
 from .core import FlightController
 from .data import FlightDatabase
-from .models import AdapterType
+from .mission import MissionPlan, MissionState, build_pattern
+from .models import CommandResult
+
+logger = logging.getLogger(__name__)
+
+# A client that cannot take a frame within this time is dropped, so one stuck
+# browser tab can never stall telemetry for everyone else.
+WS_SEND_TIMEOUT_S = 1.0
 
 
 class TakeoffRequest(BaseModel):
@@ -25,11 +34,22 @@ class ConnectRequest(BaseModel):
     adapter_type: str = DEFAULT_ADAPTER
 
 
+class PatternRequest(BaseModel):
+    kind: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class FaultRequest(BaseModel):
+    kind: str
+    value: float
+
+
 class ConnectionHub:
     """Tracks connected WebSocket clients and broadcasts JSON frames."""
 
-    def __init__(self) -> None:
+    def __init__(self, send_timeout_s: float = WS_SEND_TIMEOUT_S) -> None:
         self._clients: set[WebSocket] = set()
+        self._send_timeout = send_timeout_s
 
     async def register(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -39,14 +59,16 @@ class ConnectionHub:
         self._clients.discard(ws)
 
     async def broadcast(self, message: dict) -> None:
-        dead: list[WebSocket] = []
-        for ws in list(self._clients):
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.unregister(ws)
+        clients = list(self._clients)
+        if not clients:
+            return
+        results = await asyncio.gather(
+            *(asyncio.wait_for(ws.send_json(message), self._send_timeout) for ws in clients),
+            return_exceptions=True,
+        )
+        for ws, result in zip(clients, results):
+            if isinstance(result, BaseException):
+                self.unregister(ws)
 
     @property
     def count(self) -> int:
@@ -87,16 +109,28 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.controller = controller
     app.state.hub = hub
 
+    async def stream_once() -> None:
+        telemetry = await controller.tick()
+        await hub.broadcast({"type": "telemetry", "data": telemetry.model_dump(mode="json")})
+        for event in controller.drain_events():
+            await hub.broadcast({"type": "event", "data": event.model_dump(mode="json")})
+        if controller.twin.active:
+            await hub.broadcast({"type": "twin", "data": controller.twin.state.to_dict()})
+        if controller.mission.state != MissionState.IDLE:
+            await hub.broadcast({"type": "mission", "data": controller.mission.status()})
+
     async def stream_loop() -> None:
         period = 1.0 / STREAM_HZ
         while True:
             t_start = time.monotonic()
-            telemetry = controller.sample()
-            await hub.broadcast({"type": "telemetry", "data": telemetry.model_dump(mode="json")})
-            for event in controller.drain_events():
-                await hub.broadcast({"type": "event", "data": event.model_dump(mode="json")})
-            if controller.twin.active:
-                await hub.broadcast({"type": "twin", "data": controller.twin.state.to_dict()})
+            try:
+                await stream_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Never let one bad sample kill telemetry, failsafes and
+                # missions for the rest of the session.
+                logger.exception("telemetry tick failed; continuing")
             elapsed = time.monotonic() - t_start
             await asyncio.sleep(max(0, period - elapsed))
 
@@ -115,8 +149,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         drones = await connection_manager.discover()
         results = []
         for d in drones:
-            adapter = connection_manager._build_adapter(d)
-            caps = adapter.get_capabilities()
+            caps = connection_manager.capabilities_for(d)
             results.append({
                 "drone_id": d.drone_id,
                 "name": d.name,
@@ -129,8 +162,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/connect")
     async def connect(req: ConnectRequest | None = None) -> dict:
-        from .models import CommandResult as CR
-
         adapter_type = req.adapter_type if req else DEFAULT_ADAPTER
         drones = await connection_manager.discover()
 
@@ -142,7 +173,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         if target is None:
             available = [d.adapter_type.value for d in drones]
-            return CR(
+            return CommandResult(
                 command="connect", accepted=False,
                 message=f"unknown adapter '{adapter_type}'; available: {available}",
             ).model_dump(mode="json")
@@ -173,6 +204,64 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/land")
     async def land() -> dict:
         return (await controller.command("land")).model_dump(mode="json")
+
+    @app.post("/api/return-home")
+    async def return_home() -> dict:
+        return (await controller.command("return_home")).model_dump(mode="json")
+
+    # -- missions -------------------------------------------------------------
+    @app.get("/api/mission")
+    async def mission_status() -> dict:
+        return controller.mission.status()
+
+    @app.post("/api/mission/validate")
+    async def mission_validate(plan: MissionPlan) -> dict:
+        return controller.check_mission(plan)
+
+    @app.post("/api/mission/start")
+    async def mission_start(plan: MissionPlan) -> dict:
+        return (await controller.start_mission(plan)).model_dump(mode="json")
+
+    @app.post("/api/mission/pause")
+    async def mission_pause() -> dict:
+        return (await controller.pause_mission()).model_dump(mode="json")
+
+    @app.post("/api/mission/resume")
+    async def mission_resume() -> dict:
+        return (await controller.resume_mission()).model_dump(mode="json")
+
+    @app.post("/api/mission/abort")
+    async def mission_abort() -> dict:
+        return (await controller.abort_mission()).model_dump(mode="json")
+
+    @app.post("/api/mission/pattern")
+    async def mission_pattern(req: PatternRequest) -> dict:
+        try:
+            plan = build_pattern(req.kind, req.params)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "plan": None}
+        return {"ok": True, "error": None, "plan": plan.model_dump(mode="json")}
+
+    # -- safety ---------------------------------------------------------------
+    @app.get("/api/failsafe")
+    async def failsafe_status() -> dict:
+        return controller.guardian.status()
+
+    @app.post("/api/sim/fault")
+    async def sim_fault(req: FaultRequest) -> dict:
+        """Rehearse a failure on the simulator (never on a real aircraft)."""
+        adapter = connection_manager.adapter
+        inject = getattr(adapter, "inject_fault", None)
+        if adapter is None or inject is None:
+            return CommandResult(
+                command="sim_fault", accepted=False,
+                message="fault injection needs a connected simulator",
+            ).model_dump(mode="json")
+        try:
+            message = inject(req.kind, req.value)
+        except ValueError as exc:
+            return CommandResult(command="sim_fault", accepted=False, message=str(exc)).model_dump(mode="json")
+        return CommandResult(command="sim_fault", accepted=True, message=message).model_dump(mode="json")
 
     @app.get("/api/telemetry")
     async def telemetry() -> dict:
@@ -211,6 +300,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "adapter": connection_manager.active.name if connection_manager.active else None,
             "metrics": controller.metrics.to_dict(),
             "twin_active": controller.twin.active,
+            "link_age_s": controller.get_telemetry().link_age_s,
+            "mission_state": controller.mission.state.value,
+            "failsafe": controller.guardian.status(),
         }
 
     # -- WebSocket ----------------------------------------------------------
@@ -218,9 +310,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def telemetry_ws(ws: WebSocket) -> None:
         await hub.register(ws)
         try:
+            # Bring a (re)connecting client up to date in one go.
             await ws.send_json(
                 {"type": "telemetry", "data": controller.get_telemetry().model_dump(mode="json")}
             )
+            for event in controller.recent_events():
+                await ws.send_json({"type": "event", "data": event.model_dump(mode="json")})
+            if controller.mission.state != MissionState.IDLE:
+                await ws.send_json({"type": "mission", "data": controller.mission.status()})
             while True:
                 await ws.receive_text()
         except WebSocketDisconnect:
