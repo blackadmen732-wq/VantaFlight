@@ -24,7 +24,7 @@ Each claim is reported at the level it was actually reached (see
 | Training campaigns, weakness map, champion/challenger | INTEGRATION_TESTED |
 | Hopper camera-only mode | INTEGRATION_TESTED; needs REAL_CAMERA / HOPPER_OBSERVE on hardware |
 | Hopper live control | Disabled: FTW's control protocol is undocumented |
-| Desktop app (AppImage, .deb) | Built, installed and launched in CI-like Linux; not yet on a Chromebook |
+| Desktop app (AppImage, .deb) | Built, installed, launched, closed (backend stopped), reinstalled and removed on Ubuntu 24.04 under Xvfb; not yet on a Chromebook |
 
 `SITL_VERIFIED` means `simulation/px4/e2e_flight.py` passed against PX4 v1.14.3
 with Gazebo (15/15 stages; see [PX4.md](PX4.md#end-to-end-verification)).

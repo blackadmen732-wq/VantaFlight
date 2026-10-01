@@ -140,7 +140,7 @@ sudo apt install ./src-tauri/target/release/bundle/deb/VantaFlight_1.0.0_amd64.d
 
 The app starts and stops its own Flight Core; the first launch sets up a
 Python venv in `~/.local/share/com.vantaflight.app` (it needs `python3-venv`).
-Uninstall with `sudo apt remove vantaflight`; your flights stay in that folder.
+Uninstall with `sudo apt remove vanta-flight`; your flights stay in that folder.
 
 ### PX4 SITL
 

@@ -226,7 +226,7 @@ export default function App() {
     <BrowserRouter>
       <div className="app">
         <header className="brand">
-          <img className="logo-mark" src="/vantaflight-icon.svg" alt="" width={32} height={32} />
+          <img className="logo-mark" src="/vantaflight-icon.png" alt="" width={32} height={32} />
           VantaFlight
           <nav className="nav-links">
             {NAV.map((n) => (
