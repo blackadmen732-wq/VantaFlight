@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import json
 import logging
@@ -40,6 +41,9 @@ from .data import AsyncRecorder, FlightDatabase
 from .intelligence import IntelligenceRuntime
 from .models import AdapterType, CommandResult
 from .autonomy import AutonomyLoop, AutonomyConfig
+from .digital_twin.live import LiveTwinPublisher
+from .evolution import ChampionChallengerEvaluator
+from .evolution.training_bridge import run_packages, weakness_report
 from .digital_twin.primitives import TwinSnapshotBuilder, TwinWorldSnapshot
 from .mission import GoalWaypoint, MissionGoal, MissionRegistry, MissionSpec, MissionType
 from .runtime import (
@@ -130,6 +134,14 @@ class ReplaySeekRequest(BaseModel):
 
 class ReplaySpeedRequest(BaseModel):
     speed: float = 1.0
+
+
+class EvolutionCompareRequest(BaseModel):
+    champion_campaign_id: str
+    challenger_campaign_id: str
+    metric: str = "utility"
+    minimum_improvement: float = Field(default=0.01, ge=0)
+    max_worst_case_regression: float = Field(default=0.0, ge=0)
 
 
 class ConnectionHub:
@@ -237,6 +249,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     preflight_checker = PreflightChecker()
     autonomy_loop = AutonomyLoop()
     twin_builder = TwinSnapshotBuilder()
+    twin_publisher = LiveTwinPublisher(twin_builder)
     mission_registry = MissionRegistry()
     _stored_missions = db.list_missions_db(limit=-1)
     mission_registry.restore(_stored_missions)
@@ -272,6 +285,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
             {"type": "simulation_state", "data": intelligence.simulation.model_dump(mode="json")}
         )
         await hub.broadcast({"type": "autonomy_state", "data": autonomy_loop.to_dict()})
+        twin_publisher.publish(
+            telemetry, controller.mission, controller.airspace, autonomy_loop.to_dict()
+        )
         snapshot = twin_builder.build()
         _twin_snapshot["ref"] = snapshot
         await hub.broadcast({"type": "twin_snapshot", "data": snapshot.to_dict()})
@@ -881,6 +897,44 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return result.to_dict()
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # -- Evolution: evidence-driven improvement over training results --------
+    def _campaign_results(campaign_id: str):
+        campaign = training_engine.campaigns.get(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail=f"campaign {campaign_id} not found")
+        return campaign.results
+
+    @app.get("/api/evolution/weaknesses")
+    async def evolution_weaknesses(campaign_id: str | None = None) -> dict:
+        if campaign_id is not None:
+            results = list(_campaign_results(campaign_id))
+        else:
+            results = [r for c in training_engine.campaigns.values() for r in c.results]
+        return {"run_count": len(results), "weaknesses": weakness_report(results)}
+
+    @app.post("/api/evolution/compare")
+    async def evolution_compare(req: EvolutionCompareRequest) -> dict:
+        champion = run_packages(_campaign_results(req.champion_campaign_id), SOFTWARE_VERSION)
+        challenger = run_packages(_campaign_results(req.challenger_campaign_id), SOFTWARE_VERSION)
+        evaluator = ChampionChallengerEvaluator(
+            score_metric=req.metric,
+            minimum_improvement=req.minimum_improvement,
+            max_worst_case_regression=req.max_worst_case_regression,
+        )
+        try:
+            promote, champ, chall, reason = evaluator.evaluate(
+                req.champion_campaign_id, champion, req.challenger_campaign_id, challenger
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "promote": promote,
+            "reason": reason,
+            "metric": req.metric,
+            "champion": dataclasses.asdict(champ),
+            "challenger": dataclasses.asdict(chall),
+        }
 
     @app.post("/api/training/auto-curriculum")
     async def auto_curriculum(req: AutoCurriculumRequest) -> dict:

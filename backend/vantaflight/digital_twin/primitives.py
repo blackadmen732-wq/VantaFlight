@@ -307,6 +307,9 @@ class TwinSnapshotBuilder:
     def set_aircraft(self, layer: TwinLayer, state: TwinAircraftState) -> None:
         self._aircraft[layer.value] = state
 
+    def reset_aircraft(self) -> None:
+        self._aircraft.clear()
+
     def add_primitive(self, primitive: TwinPrimitive) -> None:
         self._primitives.append(primitive)
 
