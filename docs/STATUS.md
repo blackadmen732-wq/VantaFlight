@@ -12,6 +12,16 @@
 - [x] `goto` and `return_home` on both adapters (PX4 via MAVSDK goto_location / RTL)
 - [x] Mission planner UI with live validation and 3D waypoint preview
 
+**Routing engine** (see [ROUTING.md](ROUTING.md))
+- [x] No-fly zones (circles and polygons, convex or not) with a safety margin
+- [x] Shortest safe paths: visibility graph + A* (within 0.15% of the exact optimum)
+- [x] Best visiting order: exact Held-Karp up to 12 stops, 2-opt/Or-opt with restarts beyond
+- [x] Battery budget per stop and point-of-no-return warning
+- [x] Zone-aware return home (button and failsafes)
+- [x] Zone checks on goto commands and mission plans
+- [x] QGroundControl `.plan` export/import (PX4 and ArduPilot compatible)
+- [x] Route planner UI, zone editor, zones drawn in the digital twin
+
 **Failsafes & safety envelope**
 - [x] Geofence enforced on takeoff, goto and missions
 - [x] Automatic land on critical battery, return home on low battery or geofence breach
@@ -28,8 +38,8 @@
 - [x] Python 3.10 support fixed (`asyncio.timeout` was 3.11-only)
 
 **Testing**
-- [x] 167 backend tests (missions, failsafes, navigation, PX4 conversions, API, hub)
-- [x] 19 frontend tests (mission panel, progress, API error handling)
+- [x] 213 backend tests (missions, routing, failsafes, navigation, PX4, QGC, API, hub)
+- [x] 29 frontend tests (mission panel, routing, airspace, API error handling)
 
 ## Previous: 0.3.0 — Simulation Control Foundation
 
@@ -87,8 +97,8 @@
 - Authentication / cloud services
 - AI / voice / swarm features
 - Camera integration
-- Saving and loading mission plans
-- Obstacle avoidance
+- Saving mission plans on the server (use .plan export/import)
+- Altitude-limited airspace and live obstacle avoidance
 
 ### Known Limitations
 

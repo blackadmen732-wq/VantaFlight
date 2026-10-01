@@ -140,6 +140,8 @@ export interface Waypoint {
   altitude: number;
   hold_s?: number;
   speed_m_s?: number | null;
+  /** "via" points were added by the route planner to get around a zone. */
+  kind?: "stop" | "via";
 }
 
 export type FinishAction = "land" | "return_home" | "hold";
@@ -196,6 +198,53 @@ export interface FailsafeStatus {
 }
 
 export type FaultKind = "battery" | "link_stall";
+
+// ── Airspace & routing ───────────────────────────────────────
+
+/** A no-fly zone as sent to the server: a circle or a polygon. */
+export type ZoneSpec =
+  | { name: string; center: [number, number]; radius: number }
+  | { name: string; vertices: [number, number][] };
+
+export interface AirspaceZone {
+  id: string;
+  name: string;
+  vertices: [number, number][];
+}
+
+export interface Airspace {
+  margin_m: number;
+  zones: AirspaceZone[];
+}
+
+export interface StopBudget {
+  stop: number;
+  arrival_battery_pct: number;
+  battery_to_get_home_pct: number;
+  margin_pct: number;
+}
+
+export interface RoutePlan {
+  plan: MissionPlan;
+  order: number[];
+  method: "exact" | "heuristic" | "fixed";
+  given_order_m: number;
+  distance_m: number;
+  saved_m: number;
+  saved_pct: number;
+  detour_points: number;
+  duration_s: number;
+  battery_used_pct: number;
+  battery_start_pct: number;
+  battery_end_pct: number;
+  feasible: boolean;
+  point_of_no_return: number | null;
+  budgets: StopBudget[];
+  warnings: string[];
+}
+
+/** A QGroundControl .plan document (passed through as-is). */
+export type QgcPlan = Record<string, unknown>;
 
 export interface HealthResponse {
   status: string;

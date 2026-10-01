@@ -70,6 +70,12 @@ through `FlightController.command(..., source="mission")`, so mission commands
 pass the same safety checks and are recorded like operator commands. Failsafes
 use `source="failsafe"`. Operator commands abort an active mission.
 
+### Routing Is Pure
+`routing/` (geometry, airspace, tour, planner) is pure Python with no I/O: it
+turns stops and zones into a `MissionPlan`. The controller only adds the live
+battery level, and the safety gate and plan checks reuse the same `Airspace`
+object, so planning and enforcement can never disagree about where a zone is.
+
 ### Local Coordinates
 All positions are local ENU metres from home (`x` east, `y` north). Adapters
 that speak GPS (PX4) convert at the boundary. See [MISSIONS.md](MISSIONS.md).
@@ -88,7 +94,9 @@ backend/
     core/             # FlightController, safety
     data/             # SQLite database
     digital_twin/     # Twin state, trajectory, session
-    mission/          # Plans, planner checks, patterns, runner
+    mission/          # Plans, planner checks, patterns, runner, QGC files
+    routing/          # Airspace, safe paths, visiting order, route planner
+    geo.py            # Local metres <-> latitude/longitude
     safety/           # Validator, geofence, failsafe guardian
     mavlink/          # MAVSDKClient wrapper
     models/           # Telemetry, FlightMode, etc.

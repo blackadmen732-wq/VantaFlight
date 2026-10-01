@@ -16,7 +16,7 @@ import time
 from ..connection import ConnectionManager
 from ..data import FlightDatabase
 from ..digital_twin import TwinSession
-from ..mission import MissionPlan, MissionRunner, check_plan
+from ..mission import FinishAction, MissionPlan, MissionRunner, Waypoint, check_plan
 from ..models import CommandResult, FlightEvent, Telemetry
 from ..safety import (
     FailsafeAction,
@@ -25,7 +25,14 @@ from ..safety import (
     Geofence,
     SafetyValidator,
 )
-from ..config import SOFTWARE_VERSION
+from ..config import (
+    REFERENCE_HOME_ALT_M,
+    REFERENCE_HOME_LAT,
+    REFERENCE_HOME_LON,
+    RTL_ALTITUDE_M,
+    SOFTWARE_VERSION,
+)
+from ..routing import Airspace, RoutePlan, RouteError, plan_route, zone_from_spec
 
 _DISCONNECTED = Telemetry(connected=False)
 
@@ -71,6 +78,8 @@ class FlightController:
         self._guardian = guardian or FailsafeGuardian()
         self._geofence: Geofence = self._guardian.config.geofence
         self._safety = validator or SafetyValidator(self._geofence)
+        self._airspace = Airspace(geofence=self._geofence)
+        self._safety.airspace = self._airspace
         self._mission = MissionRunner(
             execute=lambda name, **kw: self.command(name, source=SOURCE_MISSION, **kw),
             on_event=self._log_event,
@@ -205,12 +214,101 @@ class FlightController:
             return f"{caps.name} cannot return home on its own"
         return None
 
-    # -- missions -----------------------------------------------------------
-    def check_mission(self, plan: MissionPlan) -> dict:
-        """Validate a plan against the geofence and the live battery level."""
+    # -- airspace & routing --------------------------------------------------
+    @property
+    def airspace(self) -> Airspace:
+        return self._airspace
+
+    def set_airspace(self, zone_specs: list[dict], margin_m: float | None = None) -> Airspace:
+        """Replace the no-fly zones. Raises ValueError for an invalid zone."""
+        zones = [zone_from_spec(spec, i) for i, spec in enumerate(zone_specs)]
+        for zone in zones:
+            if zone.contains((0.0, 0.0)):
+                raise ValueError(f"zone '{zone.name}' covers home; the aircraft could not take off or land")
+        margin = self._airspace.margin_m if margin_m is None else margin_m
+        self._airspace = Airspace(zones, margin, self._geofence)
+        self._safety.airspace = self._airspace
+        self._log_event("airspace", f"airspace updated: {len(zones)} no-fly zone(s), {margin:g} m margin")
+        return self._airspace
+
+    def plan_route(
+        self,
+        stops: list[Waypoint],
+        *,
+        optimize_order: bool = True,
+        finish: FinishAction = FinishAction.RETURN_HOME,
+        speed_m_s: float | None = None,
+        name: str = "Optimized route",
+    ) -> RoutePlan:
+        """Best safe route through ``stops`` with a battery budget (live level if connected)."""
         telemetry = self.get_telemetry()
         battery = telemetry.battery_percentage if telemetry.connected else None
-        return check_plan(plan, self._geofence, battery_pct=battery).to_dict()
+        kwargs = {"speed_m_s": speed_m_s} if speed_m_s else {}
+        return plan_route(
+            stops, self._airspace, optimize_order=optimize_order, finish=finish,
+            battery_pct=battery, name=name, **kwargs,
+        )
+
+    def home_reference(self) -> tuple[float, float, float]:
+        """Home as (lat, lon, alt AMSL): the aircraft's own, else the configured one."""
+        adapter = self._connections.adapter
+        home_position = getattr(adapter, "home_position", None)
+        home = home_position() if callable(home_position) else None
+        return home or (REFERENCE_HOME_LAT, REFERENCE_HOME_LON, REFERENCE_HOME_ALT_M)
+
+    async def return_home(self, source: str = SOURCE_PILOT) -> CommandResult:
+        """Fly home and land, routing around no-fly zones when needed.
+
+        A native return-to-launch flies a straight line. When that line would
+        enter a no-fly zone, we fly the shortest safe path home as a short
+        mission instead, and land at home.
+        """
+        t = self.get_telemetry()
+        here = (t.x, t.y)
+        if (
+            not self._airspace.zones
+            or not t.airborne
+            or self._unsupported("goto")
+            or self._airspace.blocking_zone(here, (0.0, 0.0), margin=0.0) is None
+        ):
+            return await self.command("return_home", source=source)
+
+        try:
+            try:
+                path = self._airspace.shortest_path(here, (0.0, 0.0))
+            except RouteError:
+                # Already inside a zone's planning margin: keep out of the zone itself.
+                path = self._airspace.with_margin(0.0).shortest_path(here, (0.0, 0.0))
+        except RouteError as exc:
+            self._log_event("error", f"no safe route home ({exc}); holding position")
+            return await self.command("hold", source=source)
+
+        altitude = max(t.altitude, RTL_ALTITUDE_M)
+        plan = MissionPlan(
+            name="Safe return home",
+            waypoints=[
+                *(Waypoint(x=x, y=y, altitude=altitude, kind="via") for x, y in path.detours),
+                Waypoint(x=0.0, y=0.0, altitude=altitude, kind="via"),
+            ],
+            finish=FinishAction.LAND,
+        )
+        reason = "pilot override (return home)" if source == SOURCE_PILOT else f"{source}: return home"
+        await self._mission.abort(reason)
+        started = await self._mission.start(plan, t)
+        if not started.accepted:
+            return CommandResult(command="return_home", accepted=False, message=started.message)
+        self._log_event(
+            "return_home",
+            f"returning home around no-fly zones via {len(path.detours)} detour point(s) ({source})",
+        )
+        return CommandResult(command="return_home", accepted=True, message="returning home on a safe route")
+
+    # -- missions -----------------------------------------------------------
+    def check_mission(self, plan: MissionPlan) -> dict:
+        """Validate a plan against the geofence, airspace and live battery level."""
+        telemetry = self.get_telemetry()
+        battery = telemetry.battery_percentage if telemetry.connected else None
+        return check_plan(plan, self._geofence, battery_pct=battery, airspace=self._airspace).to_dict()
 
     async def start_mission(self, plan: MissionPlan) -> CommandResult:
         if self._session_state in _TERMINAL or self._connections.adapter is None:
@@ -276,7 +374,10 @@ class FlightController:
         }[trigger.action]
         if command == "return_home" and self._unsupported("return_home"):
             command = "land"  # no native return-home: landing in place is the safe fallback
-        await self.command(command, source=SOURCE_FAILSAFE)
+        if command == "return_home":
+            await self.return_home(source=SOURCE_FAILSAFE)
+        else:
+            await self.command(command, source=SOURCE_FAILSAFE)
 
     # -- telemetry ----------------------------------------------------------
     def get_telemetry(self) -> Telemetry:

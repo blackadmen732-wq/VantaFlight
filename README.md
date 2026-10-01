@@ -5,7 +5,8 @@ It runs entirely on your machine — no internet, no cloud, no accounts required
 
 It contains a drone-agnostic flight core, a simulated drone and a PX4 SITL
 adapter, live telemetry streaming, safety-checked flight commands,
-**autonomous waypoint missions**, **automatic failsafes**, a 3D digital twin,
+**autonomous waypoint missions**, **route optimization around no-fly
+zones**, **automatic failsafes**, a 3D digital twin,
 a desktop UI, and local SQLite recording of every flight.
 
 > Scope note: VantaFlight is for simulation only. Physical aircraft, computer
@@ -34,7 +35,13 @@ And autonomously:
     goes stale, a **failsafe** returns it home, lands it, or holds it, and
     the UI shows why. Rehearse each one from **Sim Lab → Failsafe Rehearsal**.
 
-See [docs/MISSIONS.md](docs/MISSIONS.md) for the details.
+11. Mark **no-fly zones**, then press **Optimize route**: VantaFlight finds the
+    shortest safe order and path through your stops, flies around the zones,
+    and warns you if any stop is past the battery's point of no return.
+    Export the result as a QGroundControl `.plan`, or import one.
+
+See [docs/MISSIONS.md](docs/MISSIONS.md) and [docs/ROUTING.md](docs/ROUTING.md)
+for the details.
 
 Safety rules reject invalid commands (e.g. takeoff while disconnected, takeoff
 before arming, disarm while airborne) and the UI recovers cleanly from a
@@ -52,7 +59,8 @@ vantaflight/
 │       ├── connection/manager.py ConnectionManager (discovery + lifecycle)
 │       ├── safety/validator.py  Command safety rules
 │       ├── safety/failsafe.py   Automatic battery/geofence/link failsafes
-│       ├── mission/             Waypoint plans, checks, patterns, runner
+│       ├── mission/             Waypoint plans, checks, patterns, runner, QGC files
+│       ├── routing/             No-fly zones, safe paths, route optimizer
 │       ├── data/database.py     SQLite (WAL) local persistence
 │       ├── core/flight_controller.py  Orchestrator
 │       └── main.py              FastAPI HTTP + WebSocket server

@@ -16,8 +16,17 @@ from .config import CORS_ORIGINS, DB_PATH, DEFAULT_ADAPTER, STREAM_HZ, SOFTWARE_
 from .connection import ConnectionManager
 from .core import FlightController
 from .data import FlightDatabase
-from .mission import MissionPlan, MissionState, build_pattern
+from .mission import (
+    FinishAction,
+    MissionPlan,
+    MissionState,
+    Waypoint,
+    build_pattern,
+    export_plan,
+    import_plan,
+)
 from .models import CommandResult
+from .routing import RouteError
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +51,25 @@ class PatternRequest(BaseModel):
 class FaultRequest(BaseModel):
     kind: str
     value: float
+
+
+class AirspaceRequest(BaseModel):
+    #: Each zone is {"name", "vertices": [[x, y], ...]} or {"name", "center": [x, y], "radius": r}.
+    zones: list[dict[str, Any]] = Field(default_factory=list)
+    margin_m: float | None = None
+
+
+class RouteRequest(BaseModel):
+    stops: list[Waypoint]
+    optimize_order: bool = True
+    finish: FinishAction = FinishAction.RETURN_HOME
+    speed_m_s: float | None = Field(default=None, gt=0, le=30)
+    name: str = "Optimized route"
+
+
+class ExportRequest(BaseModel):
+    plan: MissionPlan
+    include_airspace: bool = True
 
 
 class ConnectionHub:
@@ -207,7 +235,53 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/return-home")
     async def return_home() -> dict:
-        return (await controller.command("return_home")).model_dump(mode="json")
+        return (await controller.return_home()).model_dump(mode="json")
+
+    # -- airspace & routing ---------------------------------------------------
+    @app.get("/api/airspace")
+    async def get_airspace() -> dict:
+        return controller.airspace.to_dict()
+
+    @app.post("/api/airspace")
+    async def set_airspace(req: AirspaceRequest) -> dict:
+        try:
+            airspace = controller.set_airspace(req.zones, req.margin_m)
+        except (ValueError, TypeError, KeyError) as exc:
+            return {"ok": False, "error": str(exc), "airspace": controller.airspace.to_dict()}
+        return {"ok": True, "error": None, "airspace": airspace.to_dict()}
+
+    @app.post("/api/route/optimize")
+    async def optimize_route(req: RouteRequest) -> dict:
+        try:
+            route = controller.plan_route(
+                req.stops, optimize_order=req.optimize_order, finish=req.finish,
+                speed_m_s=req.speed_m_s, name=req.name,
+            )
+        except (RouteError, ValueError) as exc:
+            return {"ok": False, "error": str(exc), "route": None}
+        return {"ok": True, "error": None, "route": route.to_dict()}
+
+    @app.post("/api/mission/export")
+    async def mission_export(req: ExportRequest) -> dict:
+        """The plan as a QGroundControl .plan document."""
+        zones = [z.vertices for z in controller.airspace.zones] if req.include_airspace else []
+        fence = controller.airspace.geofence.radius_m if req.include_airspace else None
+        return export_plan(req.plan, controller.home_reference(), zones, fence)
+
+    @app.post("/api/mission/import")
+    async def mission_import(document: dict[str, Any]) -> dict:
+        """Read a QGroundControl .plan document (does not change the airspace)."""
+        try:
+            result = import_plan(document)
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            return {"ok": False, "error": f"could not read plan: {exc}"}
+        return {
+            "ok": True,
+            "error": None,
+            "plan": result["plan"].model_dump(mode="json"),
+            "zones": result["zones"],
+            "warnings": result["warnings"],
+        }
 
     # -- missions -------------------------------------------------------------
     @app.get("/api/mission")

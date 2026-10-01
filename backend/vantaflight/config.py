@@ -60,6 +60,15 @@ BATTERY_CRITICAL_PCT: float = float(
 # Altitude used when flying home on return-to-launch.
 RTL_ALTITUDE_M: float = float(os.environ.get("VANTAFLIGHT_RTL_ALT_M", "10"))
 
+# Clearance kept from every no-fly zone when planning routes (metres).
+AIRSPACE_MARGIN_M: float = float(os.environ.get("VANTAFLIGHT_AIRSPACE_MARGIN_M", "5"))
+
+# Reference home used to export/import plans as latitude/longitude when the
+# aircraft has no GPS of its own (the simulator). Defaults to PX4 SITL's home.
+REFERENCE_HOME_LAT: float = float(os.environ.get("VANTAFLIGHT_HOME_LAT", "47.397742"))
+REFERENCE_HOME_LON: float = float(os.environ.get("VANTAFLIGHT_HOME_LON", "8.545594"))
+REFERENCE_HOME_ALT_M: float = float(os.environ.get("VANTAFLIGHT_HOME_ALT_M", "488.0"))
+
 # -- missions -----------------------------------------------------------------
 # A waypoint counts as reached inside this 3D radius (metres).
 MISSION_ACCEPT_RADIUS_M: float = float(

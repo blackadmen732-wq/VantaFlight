@@ -1001,3 +1001,134 @@ body {
   background: rgba(46, 204, 113, 0.15);
   color: var(--green);
 }
+
+/* ── Routing & airspace ──────────────────────────────────── */
+
+.plan-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tools-spacer {
+  flex: 1;
+}
+
+.chip.chip-accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.via-row td {
+  opacity: 0.6;
+}
+
+.via-row td:first-child {
+  font-size: 11px;
+  font-style: italic;
+}
+
+.route-summary {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 13px;
+}
+
+.route-summary.good { border-left: 3px solid var(--accent); }
+.route-summary.bad { border-left: 3px solid var(--red); }
+
+.route-headline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.route-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.route-danger {
+  color: var(--red);
+  margin-top: 6px;
+  font-weight: 600;
+}
+
+.airspace-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.airspace-panel input {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.zone-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.zone-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.zone-list .icon-btn {
+  margin-left: auto;
+}
+
+.zone-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: rgba(255, 92, 92, 0.6);
+  flex-shrink: 0;
+}
+
+.zone-form {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.zone-margin {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  margin-top: 10px;
+  max-width: 260px;
+}
+
+@media (max-width: 640px) {
+  .zone-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import enum
 import math
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,6 +27,9 @@ class Waypoint(BaseModel):
     altitude: float = Field(description="metres above home")
     hold_s: float = Field(default=0.0, ge=0.0, le=600.0, description="loiter time on arrival")
     speed_m_s: float | None = Field(default=None, description="leg speed; plan default if unset")
+    kind: Literal["stop", "via"] = Field(
+        default="stop", description="'via' points were added by the route planner to avoid a zone"
+    )
 
 
 class MissionPlan(BaseModel):

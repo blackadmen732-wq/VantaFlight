@@ -72,6 +72,12 @@ Patterns: `square` (`size_m`, `altitude_m`), `orbit` (`radius_m`,
 `altitude_m`, `points`), `survey` (`width_m`, `height_m`, `spacing_m`,
 `altitude_m`); all accept `center_x`/`center_y`.
 
+## Route optimization and no-fly zones
+
+See [ROUTING.md](ROUTING.md): best visiting order, shortest safe paths around
+no-fly zones, battery point of no return, and QGroundControl `.plan`
+import/export.
+
 ## Failsafes
 
 The `FailsafeGuardian` checks every telemetry sample while the aircraft is
@@ -82,6 +88,8 @@ armed and airborne. Highest priority first:
 | Battery ≤ critical                     | Land in place | 12%            |
 | Battery ≤ low                          | Return home   | 25%            |
 | Outside the geofence                   | Return home   | 150 m / 100 m  |
+
+"Return home" routes around no-fly zones when the straight line would cross one.
 | No fresh telemetry for the stale time  | Hold          | 3 s            |
 
 A failsafe aborts any running mission, is logged as a `failsafe` event (and
@@ -130,3 +138,5 @@ refused for anything but the simulator.
 | `VANTAFLIGHT_MISSION_SPEED_M_S`       | 5       |
 | `VANTAFLIGHT_MISSION_MAX_SPEED_M_S`   | 15      |
 | `VANTAFLIGHT_MISSION_MAX_WAYPOINTS`   | 100     |
+| `VANTAFLIGHT_AIRSPACE_MARGIN_M`       | 5       |
+| `VANTAFLIGHT_HOME_LAT` / `_LON` / `_ALT_M` | PX4 SITL home | Reference home for `.plan` files on the simulator |

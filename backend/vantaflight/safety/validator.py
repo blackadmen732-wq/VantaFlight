@@ -9,9 +9,13 @@ timeline.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..models import Telemetry
 from .geofence import Geofence
+
+if TYPE_CHECKING:
+    from ..routing import Airspace
 
 
 @dataclass
@@ -30,8 +34,12 @@ class SafetyValidator:
     before it ever reaches the aircraft.
     """
 
-    def __init__(self, geofence: Geofence | None = None) -> None:
+    def __init__(self, geofence: Geofence | None = None, airspace: "Airspace | None" = None) -> None:
         self.geofence = geofence or Geofence()
+        #: No-fly zones. A goto is refused if its target is inside a zone or
+        #: the straight flight there would enter one (the zone itself, not its
+        #: planning margin, so normal tracking error on a planned route is fine).
+        self.airspace = airspace
 
     def check(
         self, command: str, telemetry: Telemetry, **params: float
@@ -85,6 +93,13 @@ class SafetyValidator:
         breach = self.geofence.violation(x, y, altitude)
         if breach:
             return SafetyViolation("goto", f"waypoint outside geofence: {breach}")
+        if self.airspace is not None and self.airspace.zones:
+            zone = self.airspace.zone_at((x, y), margin=0.0)
+            if zone is not None:
+                return SafetyViolation("goto", f"waypoint is inside no-fly zone '{zone.name}'")
+            zone = self.airspace.blocking_zone((t.x, t.y), (x, y), margin=0.0)
+            if zone is not None:
+                return SafetyViolation("goto", f"flying straight there would enter no-fly zone '{zone.name}'")
         return None
 
     def _check_return_home(self, t: Telemetry, **_) -> SafetyViolation | None:

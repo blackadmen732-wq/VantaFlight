@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import type { MissionPlan, TwinState } from "../types";
+import type { AirspaceZone, MissionPlan, TwinState } from "../types";
 
 interface Props {
   twin: TwinState | null;
@@ -8,7 +8,13 @@ interface Props {
   plan?: MissionPlan | null;
   /** Index of the waypoint currently being flown to (highlighted). */
   activeWaypoint?: number | null;
+  /** No-fly zones, drawn as red columns. */
+  zones?: AirspaceZone[];
 }
+
+/** Height of the drawn no-fly columns, in metres. */
+const ZONE_HEIGHT_M = 30;
+const NO_ZONES: AirspaceZone[] = [];
 
 /** World metres -> scene units. */
 const SCALE = 0.5;
@@ -18,7 +24,12 @@ function toScene(x: number, y: number, altitude: number): [number, number, numbe
   return [x * SCALE, altitude * SCALE, y * SCALE];
 }
 
-export default function DigitalTwin({ twin, plan = null, activeWaypoint = null }: Props) {
+export default function DigitalTwin({
+  twin,
+  plan = null,
+  activeWaypoint = null,
+  zones = NO_ZONES,
+}: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef({
     scene: null as THREE.Scene | null,
@@ -28,6 +39,7 @@ export default function DigitalTwin({ twin, plan = null, activeWaypoint = null }
     trail: null as THREE.Line | null,
     groundGrid: null as THREE.GridHelper | null,
     missionGroup: null as THREE.Group | null,
+    zoneGroup: null as THREE.Group | null,
     animId: 0,
   });
 
@@ -75,9 +87,12 @@ export default function DigitalTwin({ twin, plan = null, activeWaypoint = null }
 
     const missionGroup = new THREE.Group();
     scene.add(missionGroup);
+    const zoneGroup = new THREE.Group();
+    scene.add(zoneGroup);
 
     const s = stateRef.current;
     s.missionGroup = missionGroup;
+    s.zoneGroup = zoneGroup;
     s.scene = scene;
     s.camera = camera;
     s.renderer = renderer;
@@ -161,6 +176,16 @@ export default function DigitalTwin({ twin, plan = null, activeWaypoint = null }
     );
     const reach = Math.max(8, extent * 1.6);
     camera?.position.set(reach, Math.max(6, reach * 0.75), reach);
+    // Push the fog back with the camera so large routes stay visible.
+    const fog = stateRef.current.scene?.fog;
+    if (fog instanceof THREE.Fog) {
+      fog.near = Math.max(40, reach * 1.5);
+      fog.far = Math.max(80, reach * 4);
+    }
+    if (camera) {
+      camera.far = Math.max(200, reach * 6);
+      camera.updateProjectionMatrix();
+    }
 
     const points = [toScene(0, 0, 0), ...plan.waypoints.map((w) => toScene(w.x, w.y, w.altitude))];
     const pathGeo = new THREE.BufferGeometry();
@@ -173,14 +198,42 @@ export default function DigitalTwin({ twin, plan = null, activeWaypoint = null }
 
     plan.waypoints.forEach((w, i) => {
       const active = i === activeWaypoint;
+      const via = w.kind === "via";
       const marker = new THREE.Mesh(
-        new THREE.SphereGeometry(active ? 0.28 : 0.18, 12, 12),
-        new THREE.MeshBasicMaterial({ color: active ? 0x2ecc71 : 0xf5a623 }),
+        new THREE.SphereGeometry(active ? 0.28 : via ? 0.1 : 0.18, 12, 12),
+        new THREE.MeshBasicMaterial({ color: active ? 0x2ecc71 : via ? 0x8b98a9 : 0xf5a623 }),
       );
       marker.position.set(...toScene(w.x, w.y, w.altitude));
       group.add(marker);
     });
   }, [plan, activeWaypoint]);
+
+  // No-fly zones: translucent red columns over each zone's footprint.
+  useEffect(() => {
+    const group = stateRef.current.zoneGroup;
+    if (!group) return;
+    disposeChildren(group);
+    const height = ZONE_HEIGHT_M * SCALE;
+    for (const zone of zones) {
+      const shape = new THREE.Shape(
+        zone.vertices.map(([x, y]) => new THREE.Vector2(x * SCALE, y * SCALE)),
+      );
+      const column = new THREE.Mesh(
+        new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false }),
+        new THREE.MeshBasicMaterial({
+          color: 0xff5c5c,
+          opacity: 0.22,
+          transparent: true,
+          depthWrite: false,
+        }),
+      );
+      // Shape lies in x/y; stand it up so y (north) maps to scene z and the
+      // extrusion rises from the ground.
+      column.rotation.x = Math.PI / 2;
+      column.position.y = height;
+      group.add(column);
+    }
+  }, [zones]);
 
   return (
     <div className="digital-twin-panel">

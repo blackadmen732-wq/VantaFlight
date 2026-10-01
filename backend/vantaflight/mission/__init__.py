@@ -2,6 +2,7 @@
 from .patterns import PATTERNS, build_pattern
 from .plan import FinishAction, MissionPlan, Waypoint
 from .planner import PlanReport, check_plan, estimate_duration_s
+from .qgc import export_plan, import_plan
 from .runner import MissionPhase, MissionRunner, MissionState
 
 __all__ = [
@@ -16,4 +17,6 @@ __all__ = [
     "build_pattern",
     "check_plan",
     "estimate_duration_s",
+    "export_plan",
+    "import_plan",
 ]

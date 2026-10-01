@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import time
 
+from ..geo import global_to_local, local_to_global
 from ..mavlink import MAVSDKClient, MAVSDKError, MAVLinkConfig
 from ..models import (
     Capabilities,
@@ -27,32 +28,12 @@ _PX4_MODE_MAP = {
     "MISSION": FlightMode.MISSION,
 }
 
-EARTH_RADIUS_M = 6_378_137.0
-
 # Telemetry age thresholds (seconds) for link quality grading.
 _QUALITY_BY_AGE = (
     (0.5, ConnectionQuality.EXCELLENT),
     (1.0, ConnectionQuality.GOOD),
     (2.0, ConnectionQuality.FAIR),
 )
-
-
-def local_to_global(
-    x: float, y: float, home_lat: float, home_lon: float
-) -> tuple[float, float]:
-    """Metres east/north of home -> (latitude, longitude) in degrees."""
-    lat = home_lat + math.degrees(y / EARTH_RADIUS_M)
-    lon = home_lon + math.degrees(x / (EARTH_RADIUS_M * math.cos(math.radians(home_lat))))
-    return lat, lon
-
-
-def global_to_local(
-    lat: float, lon: float, home_lat: float, home_lon: float
-) -> tuple[float, float]:
-    """(latitude, longitude) in degrees -> metres (east, north) of home."""
-    y = math.radians(lat - home_lat) * EARTH_RADIUS_M
-    x = math.radians(lon - home_lon) * EARTH_RADIUS_M * math.cos(math.radians(home_lat))
-    return x, y
 
 
 class PX4SITLAdapter:
@@ -111,6 +92,13 @@ class PX4SITLAdapter:
 
     async def return_home(self) -> None:
         await self._client.return_to_launch()
+
+    def home_position(self) -> tuple[float, float, float] | None:
+        """PX4's home as (latitude, longitude, altitude AMSL), once known."""
+        px4 = self._client.telemetry
+        if px4.home_latitude_deg is None or px4.home_longitude_deg is None:
+            return None
+        return (px4.home_latitude_deg, px4.home_longitude_deg, px4.home_absolute_altitude_m or 0.0)
 
     def get_telemetry(self) -> Telemetry:
         px4 = self._client.telemetry

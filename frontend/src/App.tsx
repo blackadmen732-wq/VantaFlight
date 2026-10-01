@@ -5,6 +5,7 @@ import {
   ACTIVE_MISSION_STATES,
   DISCONNECTED,
   type AdapterType,
+  type Airspace,
   type CommandResult,
   type FlightEvent,
   type MissionPlan,
@@ -14,6 +15,7 @@ import {
   type TwinState,
 } from "./types";
 import AdapterSelector from "./components/AdapterSelector";
+import AirspacePanel from "./components/AirspacePanel";
 import DigitalTwin from "./components/DigitalTwin";
 import DiagnosticsPanel from "./components/DiagnosticsPanel";
 import MissionPanel from "./components/MissionPanel";
@@ -36,6 +38,7 @@ function FlightDashboard() {
   const [mission, setMission] = useState<MissionStatus | null>(null);
   const [draftPlan, setDraftPlan] = useState<MissionPlan | null>(null);
   const [failsafe, setFailsafe] = useState<FlightEvent | null>(null);
+  const [airspace, setAirspace] = useState<Airspace | null>(null);
   const seen = useRef(new Set<string>());
 
   const pushEvent = useCallback((ev: FlightEvent) => {
@@ -65,6 +68,11 @@ function FlightDashboard() {
   useEffect(() => {
     api.mission.status().then(setMission).catch(() => {});
   }, []);
+
+  const refreshAirspace = useCallback(() => {
+    api.airspace.get().then(setAirspace).catch(() => {});
+  }, []);
+  useEffect(refreshAirspace, [refreshAirspace]);
 
   const reportResult = useCallback(
     (res: CommandResult) => {
@@ -221,13 +229,18 @@ function FlightDashboard() {
         status={mission}
         onResult={reportResult}
         onPlanChange={setDraftPlan}
+        airspace={airspace}
+        onAirspaceChanged={refreshAirspace}
       />
+
+      <AirspacePanel airspace={airspace} onChanged={refreshAirspace} />
 
       <div className="twin-events-layout">
         <DigitalTwin
           twin={twin}
           plan={twinPlan}
           activeWaypoint={missionActive ? mission.current_index : null}
+          zones={airspace?.zones ?? []}
         />
 
         <section className="timeline">

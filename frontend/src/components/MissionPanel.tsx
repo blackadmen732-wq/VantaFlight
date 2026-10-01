@@ -1,13 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { zoneToSpec } from "./AirspacePanel";
 import {
   ACTIVE_MISSION_STATES,
+  type Airspace,
   type CommandResult,
   type FinishAction,
   type MissionPlan,
   type MissionStatus,
   type PatternKind,
   type PlanReport,
+  type RoutePlan,
   type Waypoint,
 } from "../types";
 
@@ -19,6 +22,10 @@ interface Props {
   onResult: (result: CommandResult) => void;
   /** Called whenever the draft plan changes, so the twin can preview it. */
   onPlanChange?: (plan: MissionPlan) => void;
+  /** Current no-fly zones (imported zones are merged into these). */
+  airspace?: Airspace | null;
+  /** Called after an import changed the no-fly zones. */
+  onAirspaceChanged?: () => void;
 }
 
 const PATTERNS: { kind: PatternKind; label: string; params: Record<string, number> }[] = [
@@ -43,11 +50,29 @@ export const DEFAULT_PLAN: MissionPlan = {
   finish: "return_home",
 };
 
-export default function MissionPanel({ connected, armed, status, onResult, onPlanChange }: Props) {
-  const [plan, setPlan] = useState<MissionPlan>(DEFAULT_PLAN);
+export default function MissionPanel({
+  connected,
+  armed,
+  status,
+  onResult,
+  onPlanChange,
+  airspace = null,
+  onAirspaceChanged,
+}: Props) {
+  const [plan, setPlanState] = useState<MissionPlan>(DEFAULT_PLAN);
   const [report, setReport] = useState<PlanReport | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [route, setRoute] = useState<RoutePlan | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  /** Any manual edit makes an earlier route summary stale. */
+  const setPlan = (next: MissionPlan | ((p: MissionPlan) => MissionPlan)) => {
+    setRoute(null);
+    setNotes([]);
+    setPlanState(next);
+  };
 
   const state = status?.state ?? "IDLE";
   const active = ACTIVE_MISSION_STATES.includes(state);
@@ -86,6 +111,66 @@ export default function MissionPanel({ connected, armed, status, onResult, onPla
       else if (res.error) setCheckError(res.error);
     } catch {
       setCheckError("could not load pattern");
+    }
+  };
+
+  const optimize = async () => {
+    const stops = plan.waypoints.filter((w) => w.kind !== "via");
+    setBusy(true);
+    try {
+      const res = await api.route.optimize({
+        stops,
+        finish: plan.finish,
+        speed_m_s: plan.speed_m_s,
+        name: plan.name,
+      });
+      if (res.ok && res.route) {
+        setPlanState(res.route.plan);
+        setRoute(res.route);
+        setNotes([]);
+        setCheckError(null);
+      } else {
+        setRoute(null);
+        setCheckError(res.error ?? "could not plan a route");
+      }
+    } catch (err) {
+      setCheckError(err instanceof Error ? err.message : "could not plan a route");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportPlan = async () => {
+    try {
+      const doc = await api.route.exportPlan(plan);
+      downloadJson(doc, `${slug(plan.name) || "mission"}.plan`);
+    } catch (err) {
+      setCheckError(err instanceof Error ? err.message : "could not export the plan");
+    }
+  };
+
+  const importPlan = async (file: File) => {
+    try {
+      const res = await api.route.importPlan(JSON.parse(await file.text()));
+      if (!res.ok || !res.plan) {
+        setCheckError(res.error ?? "could not read plan");
+        return;
+      }
+      setPlan({ ...res.plan, name: file.name.replace(/\.plan$/i, "") || res.plan.name });
+      const imported = [...(res.warnings ?? [])];
+      if (res.zones && res.zones.length > 0) {
+        const existing = (airspace?.zones ?? []).map(zoneToSpec);
+        const saved = await api.airspace.set([...existing, ...res.zones]);
+        imported.push(
+          saved.ok
+            ? `added ${res.zones.length} no-fly zone(s) from the file`
+            : `no-fly zones in the file were not added: ${saved.error}`,
+        );
+        if (saved.ok) onAirspaceChanged?.();
+      }
+      setNotes(imported);
+    } catch {
+      setCheckError("that file is not a QGroundControl .plan (JSON) file");
     }
   };
 
@@ -169,8 +254,10 @@ export default function MissionPanel({ connected, armed, status, onResult, onPla
             </thead>
             <tbody>
               {plan.waypoints.map((w, i) => (
-                <tr key={i}>
-                  <td>{i + 1}</td>
+                <tr key={i} className={w.kind === "via" ? "via-row" : undefined}>
+                  <td title={w.kind === "via" ? "added to fly around a no-fly zone" : undefined}>
+                    {w.kind === "via" ? "via" : i + 1}
+                  </td>
                   <td><NumberInput value={w.x} onChange={(v) => updateWaypoint(i, { x: v })} /></td>
                   <td><NumberInput value={w.y} onChange={(v) => updateWaypoint(i, { y: v })} /></td>
                   <td><NumberInput value={w.altitude} onChange={(v) => updateWaypoint(i, { altitude: v })} /></td>
@@ -184,8 +271,41 @@ export default function MissionPanel({ connected, armed, status, onResult, onPla
               ))}
             </tbody>
           </table>
-          <button className="chip" onClick={addWaypoint}>+ Add waypoint</button>
+          <div className="plan-tools">
+            <button className="chip" onClick={addWaypoint}>+ Add waypoint</button>
+            <button
+              className="chip chip-accent"
+              disabled={busy || plan.waypoints.length === 0}
+              onClick={optimize}
+              title="Best visiting order and a safe path around no-fly zones"
+            >
+              Optimize route
+            </button>
+            <span className="tools-spacer" />
+            <button className="chip" onClick={exportPlan} title="QGroundControl / PX4 / ArduPilot">
+              Export .plan
+            </button>
+            <button className="chip" onClick={() => fileInput.current?.click()}>Import .plan</button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".plan,application/json"
+              hidden
+              data-testid="plan-file"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void importPlan(file);
+                e.target.value = "";
+              }}
+            />
+          </div>
 
+          {route && <RouteSummary route={route} />}
+          {notes.length > 0 && (
+            <div className="plan-check">
+              {notes.map((n) => <div key={n}>{n}</div>)}
+            </div>
+          )}
           <PlanCheck report={report} error={checkError} />
         </>
       )}
@@ -237,6 +357,58 @@ export function MissionProgress({ status }: { status: MissionStatus }) {
       <p className="progress-detail">{where}</p>
     </div>
   );
+}
+
+export function RouteSummary({ route }: { route: RoutePlan }) {
+  const how =
+    route.method === "exact"
+      ? "Best possible order"
+      : route.method === "heuristic"
+        ? "Optimized order"
+        : "Your order";
+  return (
+    <div className={`route-summary ${route.feasible ? "good" : "bad"}`}>
+      <div className="route-headline">
+        <strong>{how}</strong>
+        <span>
+          {route.distance_m.toFixed(0)} m
+          {route.saved_m > 0.5 && (
+            <> &middot; {route.saved_pct.toFixed(0)}% shorter than as entered ({route.given_order_m.toFixed(0)} m)</>
+          )}
+        </span>
+      </div>
+      <div className="route-stats">
+        <span>~{formatDuration(route.duration_s)}</span>
+        <span>
+          battery {route.battery_start_pct.toFixed(0)}% &rarr; {route.battery_end_pct.toFixed(0)}%
+        </span>
+        {route.detour_points > 0 && (
+          <span>
+            {route.detour_points} detour point{route.detour_points === 1 ? "" : "s"} around no-fly zones
+          </span>
+        )}
+      </div>
+      {route.warnings.map((w) => (
+        <div key={w} className={w.includes("point of no return") ? "route-danger" : "plan-warning"}>
+          {w}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function slug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function downloadJson(doc: unknown, filename: string): void {
+  if (typeof URL.createObjectURL !== "function") return;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function PlanCheck({ report, error }: { report: PlanReport | null; error: string | null }) {

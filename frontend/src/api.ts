@@ -1,11 +1,16 @@
 import type {
   AdapterType,
+  Airspace,
+  QgcPlan,
+  RoutePlan,
+  ZoneSpec,
   Capabilities,
   CommandResult,
   Diagnostics,
   DiscoveredDrone,
   FailsafeStatus,
   FaultKind,
+  FinishAction,
   HealthResponse,
   MissionPlan,
   MissionStatus,
@@ -13,6 +18,7 @@ import type {
   PlanReport,
   RunSummary,
   TwinState,
+  Waypoint,
   WsFrame,
 } from "./types";
 
@@ -88,6 +94,39 @@ export const api = {
         "/api/mission/pattern",
         { kind, params },
       ),
+  },
+
+  airspace: {
+    get: () => get<Airspace>("/api/airspace"),
+    set: (zones: ZoneSpec[], marginM?: number) =>
+      postJson<{ ok: boolean; error: string | null; airspace: Airspace }>("/api/airspace", {
+        zones,
+        margin_m: marginM,
+      }),
+  },
+
+  route: {
+    optimize: (req: {
+      stops: Waypoint[];
+      optimize_order?: boolean;
+      finish?: FinishAction;
+      speed_m_s?: number;
+      name?: string;
+    }) =>
+      postJson<{ ok: boolean; error: string | null; route: RoutePlan | null }>(
+        "/api/route/optimize",
+        req,
+      ),
+    exportPlan: (plan: MissionPlan, includeAirspace = true) =>
+      postJson<QgcPlan>("/api/mission/export", { plan, include_airspace: includeAirspace }),
+    importPlan: (doc: QgcPlan) =>
+      postJson<{
+        ok: boolean;
+        error: string | null;
+        plan?: MissionPlan;
+        zones?: ZoneSpec[];
+        warnings?: string[];
+      }>("/api/mission/import", doc),
   },
 
   failsafe: () => get<FailsafeStatus>("/api/failsafe"),

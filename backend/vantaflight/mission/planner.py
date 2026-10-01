@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..config import (
     BATTERY_LOW_PCT,
@@ -15,6 +16,9 @@ from ..config import (
 )
 from ..safety import Geofence
 from .plan import FinishAction, MissionPlan
+
+if TYPE_CHECKING:  # routing depends on missions, not the other way round
+    from ..routing import Airspace
 
 # Conservative planning figures: real aircraft vary, so the estimate is a
 # guide for the operator, not a guarantee. Matches the simulator's drain.
@@ -70,8 +74,9 @@ def check_plan(
     geofence: Geofence | None = None,
     battery_pct: float | None = None,
     battery_reserve_pct: float = BATTERY_LOW_PCT,
+    airspace: "Airspace | None" = None,
 ) -> PlanReport:
-    """Validate ``plan`` against the envelope and (optionally) the battery."""
+    """Validate ``plan`` against the envelope, no-fly zones and the battery."""
     fence = geofence or Geofence()
     errors: list[str] = []
     warnings: list[str] = []
@@ -93,6 +98,9 @@ def check_plan(
         if wp.speed_m_s is not None and not 0.5 <= wp.speed_m_s <= MISSION_MAX_SPEED_M_S:
             errors.append(f"waypoint {i}: speed must be between 0.5 and {MISSION_MAX_SPEED_M_S:g} m/s")
 
+    if airspace is not None and airspace.zones and not errors:
+        _check_airspace(plan, airspace, errors)
+
     report = PlanReport(valid=False, errors=errors, warnings=warnings)
     if errors:
         return report
@@ -113,3 +121,22 @@ def check_plan(
 
     report.valid = not errors
     return report
+
+
+def _check_airspace(plan: MissionPlan, airspace: "Airspace", errors: list[str]) -> None:
+    hint = "use Optimize route to plan around it"
+    prev, prev_label = (0.0, 0.0), "home"
+    for i, wp in enumerate(plan.waypoints, start=1):
+        here = (wp.x, wp.y)
+        zone = airspace.zone_at(here)
+        if zone is not None:
+            errors.append(f"waypoint {i} is inside no-fly zone '{zone.name}' or its safety margin")
+        else:
+            zone = airspace.blocking_zone(prev, here)
+            if zone is not None:
+                errors.append(f"leg {prev_label} → waypoint {i} crosses no-fly zone '{zone.name}'; {hint}")
+        prev, prev_label = here, f"waypoint {i}"
+    if plan.finish == FinishAction.RETURN_HOME and plan.waypoints:
+        zone = airspace.blocking_zone(prev, (0.0, 0.0))
+        if zone is not None:
+            errors.append(f"the straight flight home crosses no-fly zone '{zone.name}'; {hint}")
