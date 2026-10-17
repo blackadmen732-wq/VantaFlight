@@ -161,6 +161,38 @@ async def test_clean_landing_and_replay_after_completion():
         assert event in h.events()
 
 
+async def test_back_to_back_races_reposition_to_the_start_line():
+    h = await started("sitl_line_3", finish="hold")
+    await h.fly_until(lambda: not h.session.active, timeout=120)
+    assert h.state() == RaceState.COMPLETE
+    assert np.linalg.norm(h.position()[:2]) > 30, "first race ends far from home"
+    res = await h.session.start(preset_courses()["sitl_slalom_4"], RaceConfig(perception="vision"))
+    assert res["accepted"], res
+    await h.fly_until(lambda: h.state() == RaceState.RUNNING, timeout=60)
+    assert np.linalg.norm(h.position()[:2]) < 1.5, "raced from the start line"
+    assert "race_repositioning" in h.events() and "race_aligning" in h.events()
+    await h.fly_until(lambda: not h.session.active, timeout=150)
+    assert h.state() == RaceState.COMPLETE
+
+
+async def test_race_turns_to_face_the_first_gate_before_starting():
+    h = Harness()
+    await h.connect()
+    # Take off facing north; the first slalom gate is east-north-east.
+    assert (await h.controller.command("arm")).accepted
+    assert (await h.controller.command("takeoff", target_altitude_m=5.0)).accepted
+    h.adapter._heading = 0.0
+    await h.fly(6.0)
+    res = await h.session.start(preset_courses()["sitl_slalom_4"], RaceConfig(perception="vision"))
+    assert res["accepted"], res
+    await h.fly_until(lambda: h.state() == RaceState.RUNNING, timeout=30)
+    gate = h.session.course.ordered_gates[0].position
+    bearing = math.degrees(math.atan2(gate[1], gate[0]))
+    assert abs(h.adapter.local_state().yaw_enu_deg - bearing) < 15
+    await h.fly_until(lambda: not h.session.active, timeout=150)
+    assert h.state() == RaceState.COMPLETE
+
+
 async def test_map_perception_baseline_completes():
     h = await started("sitl_slalom_4", perception="scene")
     await h.fly_until(lambda: not h.session.active, timeout=120)
@@ -265,6 +297,16 @@ async def test_stale_telemetry_holds_last_point_then_continues():
     await h.fly_until(lambda: not h.session.active, timeout=120)
     assert h.state() == RaceState.COMPLETE
     assert {"race_telemetry_stale", "race_telemetry_restored"} <= set(h.events())
+
+
+async def test_frozen_vehicle_state_fault_holds_then_continues():
+    h = await started("sitl_line_3")
+    await h.fly(1.0)
+    h.session.inject_fault("state_stall", 1.0)
+    await h.fly_until(lambda: h.state() == RaceState.HOLDING_STALE, timeout=1.0)
+    await h.fly_until(lambda: h.state() in (RaceState.RUNNING, RaceState.RECOVERING), timeout=2.0)
+    await h.fly_until(lambda: not h.session.active, timeout=120)
+    assert h.state() == RaceState.COMPLETE
 
 
 async def test_long_telemetry_loss_triggers_failsafe_and_aborts_race():

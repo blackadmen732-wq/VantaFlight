@@ -22,6 +22,7 @@ const FAULTS: { kind: RaceFaultKind; label: string; duration: number; value?: nu
   { kind: "vision_blackout", label: "Vision blackout 3 s", duration: 3, hint: "No camera frames: the loop must hold, then resume." },
   { kind: "low_confidence", label: "Low confidence 3 s", duration: 3, value: 0.05, hint: "Detections at 5% confidence: below the execution floor." },
   { kind: "occlude_gate", label: "Hide next gate 4 s", duration: 4, hint: "The next gate disappears: hold, search, reacquire." },
+  { kind: "state_stall", label: "Freeze vehicle state 1 s", duration: 1, hint: "Stale vehicle state: hold the last known point, then continue." },
   { kind: "setpoint_delay", label: "Late setpoints 0.5 s", duration: 0.5, value: 0.6, hint: "Setpoints arrive 600 ms late: the flight core must refuse them." },
 ];
 

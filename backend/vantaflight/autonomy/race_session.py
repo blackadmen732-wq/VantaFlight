@@ -96,7 +96,11 @@ class RaceConfig:
     search_after_s: float = 2.0
     #: Lost the current gate this long: give up and hold.
     max_lost_s: float = 20.0
-    takeoff_timeout_s: float = 60.0
+    takeoff_timeout_s: float = 90.0
+    #: Further than this from the start line when starting: fly back first.
+    reposition_radius_m: float = 2.0
+    #: Facing within this of the first gate before the loop takes over.
+    align_tolerance_deg: float = 12.0
     #: Offboard reported inactive this long while flying: abort.
     offboard_grace_s: float = 1.0
     record_hz: float = 5.0
@@ -167,6 +171,8 @@ def gate_crossing(gate: GazeboGate, prev: np.ndarray, cur: np.ndarray, margin: f
 class _Faults:
     setpoint_delay_s: float = 0.0
     setpoint_delay_until: float = 0.0
+    state_stall_until: float = 0.0
+    frozen_state: object = None
 
 
 @dataclass
@@ -229,6 +235,7 @@ class RaceSession:
         self._race_started_at = 0.0
         self._finished_at = 0.0
         self._prepare_deadline = 0.0
+        self._prep_phase = "climb"
         self._lost_since: float | None = None
         self._offboard_lost_since: float | None = None
         self._last_record = -math.inf
@@ -376,6 +383,12 @@ class RaceSession:
                 raise ValueError("no gate left to occlude")
             self._perception.inject_occlusion(gid, duration_s)
             msg = f"{gid} occluded for {duration_s:g}s"
+        elif kind == "state_stall":
+            # Freeze the vehicle state the loop sees, as if the telemetry
+            # link stopped delivering (works on any adapter, PX4 included).
+            self._faults.frozen_state = self._controller.adapter.local_state()
+            self._faults.state_stall_until = now + duration_s
+            msg = f"vehicle state frozen for {duration_s:g}s"
         elif kind == "setpoint_delay":
             delay = 0.6 if value is None else float(value)
             self._faults.setpoint_delay_s = delay
@@ -383,7 +396,8 @@ class RaceSession:
             msg = f"setpoints delayed by {delay * 1000:.0f} ms for {duration_s:g}s"
         else:
             raise ValueError(
-                f"unknown fault '{kind}'; expected vision_blackout, low_confidence, occlude_gate or setpoint_delay"
+                f"unknown fault '{kind}'; expected vision_blackout, low_confidence, occlude_gate, "
+                "state_stall or setpoint_delay"
             )
         self._event("race_fault", f"fault injected: {msg}")
         return msg
@@ -460,6 +474,8 @@ class RaceSession:
             self._offboard_lost_since = None
 
         local = adapter.local_state()
+        if now < self._faults.state_stall_until and self._faults.frozen_state is not None:
+            local = self._faults.frozen_state
         age = local.age_s(now)
         if not local.valid or age > self.config.telemetry_stale_s:
             if not self._was_stale:
@@ -540,27 +556,62 @@ class RaceSession:
         self._record(now, local, perception, desired)
 
     async def _step_preparing(self, now: float, telemetry) -> None:
+        """climb → (reposition to the start line) → align with gate 1 → race."""
         course = self.course
-        if telemetry.airborne and telemetry.altitude >= course.start_altitude_m * 0.85:
-            local = self._controller.adapter.local_state()
-            if not local.valid:
-                return  # wait for a local position before entering offboard
-            ned = enu_to_ned(local.position_enu)
-            yaw = enu_yaw_deg_to_ned(local.yaw_enu_deg)
-            res = await self._controller.start_offboard(*ned, yaw, source=SOURCE)
+        controller = self._controller
+        if now > self._prepare_deadline:
+            self._finish_state(RaceState.FAILED, f"could not reach the start line in time ({self._prep_phase})")
+            await controller.command("hold", source=SOURCE)
+            return
+        local = controller.adapter.local_state()
+        if not local.valid:
+            return  # wait for a local position
+        position = np.asarray(local.position_enu, dtype=np.float64)
+        start = np.array([0.0, 0.0, course.start_altitude_m])
+        first = course.ordered_gates[0].position
+        bearing = math.degrees(math.atan2(first[1] - position[1], first[0] - position[0]))
+
+        if self._prep_phase == "climb":
+            if not (telemetry.airborne and telemetry.altitude >= course.start_altitude_m * 0.85):
+                return
+            if float(np.linalg.norm(position[:2] - start[:2])) > self.config.reposition_radius_m:
+                res = await controller.command(
+                    "goto", source=SOURCE, x=0.0, y=0.0,
+                    altitude=course.start_altitude_m, speed_m_s=min(3.0, self.config.speed_m_s),
+                )
+                if not res.accepted:
+                    self._finish_state(RaceState.FAILED, f"could not fly to the start line: {res.message}")
+                    return
+                self._prep_phase = "reposition"
+                self._event("race_repositioning", "flying to the start line before racing")
+                return
+            self._prep_phase = "engage"
+        if self._prep_phase == "reposition":
+            near = float(np.linalg.norm(position[:2] - start[:2])) <= 1.0 and abs(position[2] - start[2]) <= 0.8
+            if not (near and float(np.linalg.norm(local.velocity_enu)) < 0.6):
+                return
+            self._prep_phase = "engage"
+        if self._prep_phase == "engage":
+            ned = enu_to_ned(position)
+            res = await controller.start_offboard(*ned, enu_yaw_deg_to_ned(local.yaw_enu_deg), source=SOURCE)
             if not res.accepted:
                 self._finish_state(RaceState.FAILED, f"could not enter offboard: {res.message}")
-                await self._controller.command("hold", source=SOURCE)
+                await controller.command("hold", source=SOURCE)
                 return
             self._loop.initialize(self._permit, total_gates=len(self._gates))
-            self._loop.execution.update_hold_position(local.position_enu, local.yaw_enu_deg)
-            self._prev_pos = np.asarray(local.position_enu, dtype=np.float64)
+            self._loop.execution.update_hold_position(position, bearing)
+            self._prep_phase = "align"
+            self._event("race_aligning", f"offboard engaged at {position[2]:.1f} m; turning to face {course.ordered_gates[0].gate_id}")
+        if self._prep_phase == "align":
+            self._loop.execution.set_hold_yaw(bearing)
+            await self._send_hold(now)
+            error = abs(((local.yaw_enu_deg - bearing) + 180.0) % 360.0 - 180.0)
+            if error > self.config.align_tolerance_deg:
+                return
+            self._prev_pos = position
             self._race_started_at = now
             self.state = RaceState.RUNNING
-            self._event("race_running", f"offboard engaged at {telemetry.altitude:.1f} m; racing")
-        elif now > self._prepare_deadline:
-            self._finish_state(RaceState.FAILED, "takeoff did not reach the course altitude in time")
-            await self._controller.command("hold", source=SOURCE)
+            self._event("race_running", f"aligned with {course.ordered_gates[0].gate_id}; racing")
 
     async def _begin_finish(self, now: float) -> None:
         self.state = RaceState.FINISHING

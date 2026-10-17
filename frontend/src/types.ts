@@ -696,7 +696,7 @@ export const ACTIVE_RACE_STATES: VantaRaceState[] = [
 
 export type RacePerception = "vision" | "scene";
 export type RaceFinish = "land" | "return_home" | "hold";
-export type RaceFaultKind = "vision_blackout" | "low_confidence" | "occlude_gate" | "setpoint_delay";
+export type RaceFaultKind = "vision_blackout" | "low_confidence" | "occlude_gate" | "state_stall" | "setpoint_delay";
 
 export interface RaceGate {
   gate_id: string;
