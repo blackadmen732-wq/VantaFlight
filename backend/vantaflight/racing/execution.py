@@ -62,6 +62,16 @@ class SimulationOnlyExecutionGuard:
             raise AutonomousExecutionRejected("adapter does not advertise a simulation capability")
 
         parsed = urlparse(endpoint)
+        if parsed.scheme.lower() == "sim":
+            # The in-process mock drone has no network endpoint at all; it is
+            # the only adapter allowed to use the sim:// pseudo-scheme.
+            if adapter_type != "mock":
+                raise AutonomousExecutionRejected("sim:// endpoints are reserved for the in-process mock")
+            return SimulationExecutionPermit(
+                endpoint=endpoint,
+                adapter_type=adapter_type,
+                _proof=_PERMIT_PROOF,
+            )
         if parsed.scheme.lower() not in cls._SITL_SCHEMES:
             raise AutonomousExecutionRejected("only UDP endpoints are approved for SITL")
         if parsed.hostname not in cls._LOCAL_HOSTS:

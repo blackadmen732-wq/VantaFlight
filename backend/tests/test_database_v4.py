@@ -17,8 +17,8 @@ def db():
 
 class TestMigrationV4:
 
-    def test_schema_version_is_4(self, db: FlightDatabase):
-        assert db.schema_version == 4
+    def test_schema_version_is_current(self, db: FlightDatabase):
+        assert db.schema_version == 5
 
     def test_missions_table_exists(self, db: FlightDatabase):
         row = db._conn.execute(
@@ -41,10 +41,10 @@ class TestMigrationV4:
     def test_idempotent_migration(self, tmp_path: Path):
         path = tmp_path / "migrate.db"
         db1 = FlightDatabase(path)
-        assert db1.schema_version == 4
+        assert db1.schema_version == 5
         db1.close()
         db2 = FlightDatabase(path)
-        assert db2.schema_version == 4
+        assert db2.schema_version == 5
         db2.close()
 
 

@@ -111,7 +111,23 @@ class SimulatedCameraSource(BaseCameraSource):
     async def stop(self) -> None:
         self._running = False
 
-    def _render(self) -> np.ndarray:
+    def render(
+        self,
+        aircraft: AircraftTruth,
+        hidden_gate_ids: frozenset[str] | set[str] = frozenset(),
+    ) -> np.ndarray:
+        """Render one frame from ``aircraft`` without the async pacing of read().
+
+        ``hidden_gate_ids`` are left out, as if occluded.
+        """
+        previous = self._aircraft
+        self._aircraft = aircraft
+        try:
+            return self._render(hidden_gate_ids)
+        finally:
+            self._aircraft = previous
+
+    def _render(self, hidden_gate_ids: frozenset[str] | set[str] = frozenset()) -> np.ndarray:
         frame = np.full((self._height, self._width, 3), self._bg_color, dtype=np.uint8)
 
         if self._aircraft is None:
@@ -142,7 +158,15 @@ class SimulatedCameraSource(BaseCameraSource):
         R = R_body_to_cam @ R_world_to_body
         K = self._profile.matrix
 
-        for gate in self._world.gates:
+        # Painter's order: far gates first, so nearer ones occlude them.
+        ordered = sorted(
+            self._world.gates,
+            key=lambda g: float(np.linalg.norm(g.position - cam_pos)),
+            reverse=True,
+        )
+        for gate in ordered:
+            if gate.gate_id in hidden_gate_ids:
+                continue
             corners = self._gate_corners(gate)
             projected = self._project_points(corners, cam_pos, R, K)
             if projected is not None:

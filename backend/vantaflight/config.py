@@ -90,3 +90,14 @@ MISSION_MAX_SPEED_M_S: float = float(
 MISSION_MAX_WAYPOINTS: int = int(os.environ.get("VANTAFLIGHT_MISSION_MAX_WAYPOINTS", "100"))
 
 SOFTWARE_VERSION: str = "1.0.0"
+
+# -- VantaRace closed loop (simulation only) ---------------------------------
+#: Setpoints older than this when they reach the flight core are refused.
+AUTONOMY_SETPOINT_MAX_AGE_S: float = float(
+    os.environ.get("VANTAFLIGHT_AUTONOMY_SETPOINT_MAX_AGE_S", "0.3")
+)
+#: Hard cap on commanded speed, whatever the planner asks for.
+AUTONOMY_MAX_SPEED_M_S: float = float(
+    os.environ.get("VANTAFLIGHT_AUTONOMY_MAX_SPEED_M_S", "8.0")
+)
+AUTONOMY_LOOP_HZ: float = float(os.environ.get("VANTAFLIGHT_AUTONOMY_LOOP_HZ", "20"))

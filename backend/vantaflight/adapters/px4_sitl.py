@@ -16,6 +16,7 @@ from ..models import (
     Capabilities,
     ConnectionQuality,
     FlightMode,
+    LocalState,
     Telemetry,
 )
 
@@ -26,6 +27,7 @@ _PX4_MODE_MAP = {
     "LAND": FlightMode.LANDING,
     "RETURN_TO_LAUNCH": FlightMode.RETURNING,
     "MISSION": FlightMode.MISSION,
+    "OFFBOARD": FlightMode.OFFBOARD,
 }
 
 # Telemetry age thresholds (seconds) for link quality grading.
@@ -144,8 +146,36 @@ class PX4SITLAdapter:
             link_age_s=round(link_age, 2),
         )
 
-    async def start_offboard(self) -> None:
-        await self._client.start_offboard()
+    @property
+    def offboard_active(self) -> bool:
+        return self._map_flight_mode(self._client.telemetry.flight_mode, True) == FlightMode.OFFBOARD
+
+    async def start_offboard(
+        self, north_m: float, east_m: float, down_m: float, yaw_deg: float,
+    ) -> None:
+        await self._client.start_offboard(north_m, east_m, down_m, yaw_deg)
+
+    async def set_position_velocity_ned(
+        self,
+        position_ned: tuple[float, float, float],
+        velocity_ned: tuple[float, float, float],
+        yaw_deg: float,
+    ) -> None:
+        await self._client.set_position_velocity_ned(position_ned, velocity_ned, yaw_deg)
+
+    def local_state(self) -> LocalState:
+        """PX4's EKF local NED state, converted to VantaFlight ENU."""
+        px4 = self._client.telemetry
+        received = getattr(px4, "local_received_at", 0.0) or 0.0
+        return LocalState(
+            received_at=received,
+            position_enu=(px4.local_east_m, px4.local_north_m, -px4.local_down_m),
+            velocity_enu=(px4.local_ve_m_s, px4.local_vn_m_s, -px4.local_vd_m_s),
+            yaw_enu_deg=((90.0 - px4.yaw_deg) + 180.0) % 360.0 - 180.0,
+            pitch_deg=px4.pitch_deg,
+            roll_deg=px4.roll_deg,
+            valid=received > 0.0 and self.connected,
+        )
 
     async def stop_offboard(self) -> None:
         await self._client.stop_offboard()

@@ -79,6 +79,18 @@ class PX4Telemetry:
     home_absolute_altitude_m: Optional[float] = None
     #: Wall-clock time of the last message received from PX4 (0 = never).
     last_message_at: float = 0.0
+    # High-rate local state (EKF local NED frame) for offboard autonomy.
+    local_north_m: float = 0.0
+    local_east_m: float = 0.0
+    local_down_m: float = 0.0
+    local_vn_m_s: float = 0.0
+    local_ve_m_s: float = 0.0
+    local_vd_m_s: float = 0.0
+    #: time.monotonic() when the last local position arrived (0 = never).
+    local_received_at: float = 0.0
+    roll_deg: float = 0.0
+    pitch_deg: float = 0.0
+    yaw_deg: float = 0.0
 
     def touch(self) -> None:
         self.last_message_at = time.time()
@@ -140,6 +152,14 @@ class MAVSDKClient:
 
         if not health_ok:
             logger.warning("PX4 health not fully ready, proceeding with caution")
+
+        # Ask for the high-rate streams the autonomy loop needs. Best effort:
+        # PX4 already streams these fast on the onboard (14540) link.
+        for setter, rate in (("set_rate_position_velocity_ned", 30.0), ("set_rate_attitude_euler", 30.0)):
+            try:
+                await getattr(self._system.telemetry, setter)(rate)
+            except Exception as exc:  # not fatal
+                logger.info("could not set %s: %s", setter, exc)
 
         self._telemetry.connected = True
         self._telemetry.health_all_ok = health_ok
@@ -253,6 +273,20 @@ class MAVSDKClient:
         def _flight_mode(mode) -> None:
             tel.flight_mode = str(mode)
 
+        def _local(pv) -> None:
+            tel.local_north_m = pv.position.north_m
+            tel.local_east_m = pv.position.east_m
+            tel.local_down_m = pv.position.down_m
+            tel.local_vn_m_s = pv.velocity.north_m_s
+            tel.local_ve_m_s = pv.velocity.east_m_s
+            tel.local_vd_m_s = pv.velocity.down_m_s
+            tel.local_received_at = time.monotonic()
+
+        def _attitude(att) -> None:
+            tel.roll_deg = att.roll_deg
+            tel.pitch_deg = att.pitch_deg
+            tel.yaw_deg = att.yaw_deg
+
         def _home(home) -> None:
             tel.home_latitude_deg = home.latitude_deg
             tel.home_longitude_deg = home.longitude_deg
@@ -268,6 +302,8 @@ class MAVSDKClient:
             "in_air": (px4.in_air, _in_air),
             "flight_mode": (px4.flight_mode, _flight_mode),
             "home": (px4.home, _home),
+            "local_position": (px4.position_velocity_ned, _local),
+            "attitude": (px4.attitude_euler, _attitude),
         }
 
         async def _pump(name: str, open_stream, apply) -> None:
@@ -292,11 +328,19 @@ class MAVSDKClient:
                 t.cancel()
             raise
 
-    async def start_offboard(self) -> None:
+    async def start_offboard(
+        self, north_m: float, east_m: float, down_m: float, yaw_deg: float,
+    ) -> None:
+        """Start offboard holding the given local NED position.
+
+        PX4 rejects offboard without a prior setpoint, and whatever is sent
+        first is flown to immediately, so the caller must pass the aircraft's
+        *current* position (never a fixed origin, which is on the ground).
+        """
         self._require_connected()
         try:
             from mavsdk.offboard import PositionNedYaw
-            initial = PositionNedYaw(0.0, 0.0, 0.0, 0.0)
+            initial = PositionNedYaw(north_m, east_m, down_m, yaw_deg)
             await self._system.offboard.set_position_ned(initial)
             await self._system.offboard.start()
         except ImportError:
@@ -324,6 +368,27 @@ class MAVSDKClient:
             raise MAVSDKError("MAVSDK_NOT_FOUND", "mavsdk offboard module not available")
         except Exception as e:
             raise MAVSDKError("PX4_COMMAND_REJECTED", f"set_position_ned failed: {e}")
+
+    async def set_position_velocity_ned(
+        self,
+        position_ned: tuple[float, float, float],
+        velocity_ned: tuple[float, float, float],
+        yaw_deg: float,
+    ) -> None:
+        """Position setpoint with velocity feed-forward (smooth tracking)."""
+        self._require_connected()
+        try:
+            from mavsdk.offboard import PositionNedYaw, VelocityNedYaw
+            n, e, d = (float(v) for v in position_ned)
+            vn, ve, vd = (float(v) for v in velocity_ned)
+            await self._system.offboard.set_position_velocity_ned(
+                PositionNedYaw(n, e, d, float(yaw_deg)),
+                VelocityNedYaw(vn, ve, vd, float(yaw_deg)),
+            )
+        except ImportError:
+            raise MAVSDKError("MAVSDK_NOT_FOUND", "mavsdk offboard module not available")
+        except Exception as e:
+            raise MAVSDKError("PX4_COMMAND_REJECTED", f"set_position_velocity_ned failed: {e}")
 
     async def set_velocity_ned(
         self, north_m_s: float, east_m_s: float, down_m_s: float, yaw_deg: float,
