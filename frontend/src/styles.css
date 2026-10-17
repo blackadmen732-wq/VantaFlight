@@ -1639,3 +1639,58 @@ body {
   .forge-steps,
   .course-types { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* -- VantaRace ------------------------------------------------------------ */
+.race-page .card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.race-page .card h3 { margin-top: 0; }
+.race-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr);
+  gap: 16px;
+}
+@media (max-width: 860px) {
+  .race-layout { grid-template-columns: 1fr; }
+}
+.race-setup .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.race-setup select,
+.race-setup input[type="range"] {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+}
+.race-setup input[type="range"] { padding: 0; accent-color: var(--accent); }
+.race-setup .button-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.race-setup .button-row .btn { flex: 1; }
+.race-setup .error-list { color: var(--red); font-size: 12px; padding-left: 18px; }
+.course-map {
+  width: 100%;
+  max-height: 360px;
+  background: var(--panel-2);
+  border-radius: 10px;
+}
+.course-map .route { stroke: var(--border); stroke-width: 0.35; stroke-dasharray: 1 1; }
+.course-map .home { fill: var(--muted); }
+.course-map .gate line { stroke: var(--amber); stroke-width: 0.6; stroke-linecap: round; }
+.course-map .gate.next line { stroke: var(--accent); stroke-width: 0.9; }
+.course-map .gate.passed line { stroke: var(--green); }
+.course-map .gate text { fill: var(--muted); font-size: 2.2px; }
+.course-map .aircraft { fill: var(--text); stroke: var(--accent); stroke-width: 0.3; }
+.race-map .splits { width: 100%; margin-top: 10px; font-size: 12px; border-collapse: collapse; }
+.race-map .splits th { text-align: left; color: var(--muted); font-weight: 500; }
+.race-map .splits td, .race-map .splits th { padding: 4px 6px; border-bottom: 1px solid var(--border); }
