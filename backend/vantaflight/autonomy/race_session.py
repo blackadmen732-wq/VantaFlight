@@ -744,6 +744,9 @@ class RaceSession:
         }.get(state, "race_state")
         self._event(event, f"race {state.value.lower()}: {message}")
         self._buffer_summary()
+        # Persist now: an abort from the API, a pilot override or a failsafe
+        # ends the race outside the loop, and no tick follows to flush.
+        self._flush_records()
 
     def _event(self, event_type: str, message: str) -> None:
         self._controller.log_event(event_type, message)
@@ -792,7 +795,6 @@ class RaceSession:
 
     def _fail_start(self, message: str) -> dict:
         self._finish_state(RaceState.FAILED, message)
-        self._flush_records()
         return self._result(False, message)
 
     def _result(self, accepted: bool, message: str) -> dict:

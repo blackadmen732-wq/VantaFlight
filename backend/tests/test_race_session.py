@@ -240,6 +240,29 @@ async def test_pilot_command_overrides_race():
     assert "pilot override" in h.session.message
 
 
+@pytest.mark.parametrize("ending", ["operator_abort", "pilot_override", "battery_failsafe"])
+async def test_a_race_ended_outside_the_loop_records_its_final_event_and_summary(ending):
+    """Abort, override and failsafe end the race between loop ticks; the
+    closing event and summary must still reach the recording (and replay)."""
+    h = await started("sitl_line_3")
+    await h.fly(1.0)
+    if ending == "operator_abort":
+        assert (await h.session.abort())["accepted"]
+    elif ending == "pilot_override":
+        assert (await h.controller.command("hold")).accepted
+    else:
+        h.adapter.inject_fault("battery", 20.0)
+        await h.fly_until(lambda: not h.session.active, timeout=2.0)
+    assert h.state() == RaceState.ABORTED
+    rows = h.db.get_autonomy_samples(h.controller.flight_id)
+    assert rows[-1]["kind"] == "race_summary", [r["kind"] for r in rows[-3:]]
+    assert rows[-1]["data"]["state"] == "ABORTED"
+    events = [r["data"]["event_type"] for r in rows if r["kind"] == "race_event"]
+    assert events[-1] == "race_aborted"
+    await h.fly(1.0)  # nothing is written twice once the race is over
+    assert len(h.db.get_autonomy_samples(h.controller.flight_id)) == len(rows)
+
+
 # -- perception faults --------------------------------------------------------------
 async def test_stale_vision_holds_then_resumes():
     h = await started("sitl_line_3")
