@@ -17,6 +17,8 @@ class FlightMode(str, Enum):
     MISSION = "MISSION"
     #: Flying home before landing (return-to-launch).
     RETURNING = "RETURNING"
+    #: Following an external setpoint stream (VantaRace autonomy).
+    OFFBOARD = "OFFBOARD"
 
 
 class ConnectionQuality(str, Enum):

@@ -26,6 +26,8 @@ from ..safety import (
     SafetyValidator,
 )
 from ..config import (
+    AUTONOMY_MAX_SPEED_M_S,
+    AUTONOMY_SETPOINT_MAX_AGE_S,
     REFERENCE_HOME_ALT_M,
     REFERENCE_HOME_LAT,
     REFERENCE_HOME_LON,
@@ -52,6 +54,7 @@ _OVERRIDES_MISSION = {"disarm", "takeoff", "hold", "land", "goto", "return_home"
 SOURCE_PILOT = "pilot"
 SOURCE_MISSION = "mission"
 SOURCE_FAILSAFE = "failsafe"
+SOURCE_AUTONOMY = "autonomy"
 
 
 class SessionState(str, enum.Enum):
@@ -100,6 +103,9 @@ class FlightController:
         self._last_telemetry_time: float = 0.0
         self._metrics = _Metrics()
         self._connect_lock = asyncio.Lock()
+        #: The VantaRace session, attached by the app (see attach_autonomy).
+        self._autonomy = None
+        self._offboard_stats = {"sent": 0, "rejected": 0, "expired": 0}
 
     async def connect(self, target=None) -> CommandResult:
         async with self._connect_lock:
@@ -151,6 +157,7 @@ class FlightController:
                 return CommandResult(command="disconnect", accepted=True, message="disconnected (session already ended)")
 
             await self._mission.abort("operator disconnected")
+            await self._abort_autonomy("operator disconnected")
             await self._connections.disconnect()
             self._log_event("disconnected", "disconnected from drone")
             self._end_flight("completed")
@@ -185,6 +192,7 @@ class FlightController:
 
         if source == SOURCE_PILOT and name in _OVERRIDES_MISSION:
             await self._mission.abort(f"pilot override ({name})")
+            await self._abort_autonomy(f"pilot override ({name})")
 
         adapter = self._connections.adapter
         assert adapter is not None
@@ -404,6 +412,7 @@ class FlightController:
     async def _run_failsafe(self, trigger: FailsafeTrigger) -> None:
         self._log_event("failsafe", trigger.message)
         await self._mission.abort(f"failsafe: {trigger.reason}")
+        await self._abort_autonomy(f"failsafe: {trigger.reason}")
         command = {
             FailsafeAction.HOLD: "hold",
             FailsafeAction.LAND: "land",
@@ -415,6 +424,162 @@ class FlightController:
             await self.return_home(source=SOURCE_FAILSAFE)
         else:
             await self.command(command, source=SOURCE_FAILSAFE)
+
+    # -- autonomy (VantaRace offboard) -----------------------------------------
+    def attach_autonomy(self, session) -> None:
+        """Register the race session so overrides and failsafes can stop it."""
+        self._autonomy = session
+
+    @property
+    def autonomy(self):
+        return self._autonomy
+
+    async def _abort_autonomy(self, reason: str) -> None:
+        session = self._autonomy
+        if session is not None and getattr(session, "active", False):
+            await session.abort(reason, command_vehicle=False)
+
+    @property
+    def adapter(self):
+        return self._connections.adapter
+
+    @property
+    def active_target(self):
+        return self._connections.active
+
+    @property
+    def geofence(self) -> Geofence:
+        return self._geofence
+
+    def log_event(self, event_type: str, message: str) -> FlightEvent:
+        return self._log_event(event_type, message)
+
+    def record_autonomy_samples(self, samples: list[tuple[float, str, dict]]) -> None:
+        if self._flight_id is not None and self._session_state not in _TERMINAL:
+            self._db.record_autonomy_samples(self._flight_id, samples)
+
+    def _offboard_capable(self) -> str | None:
+        adapter = self._connections.adapter
+        if adapter is None:
+            return "not connected"
+        caps = adapter.get_capabilities()
+        if "offboard" not in caps.supported_capabilities or not all(
+            callable(getattr(adapter, m, None))
+            for m in ("start_offboard", "stop_offboard", "set_position_velocity_ned", "local_state")
+        ):
+            return f"{caps.name} does not support offboard control"
+        return None
+
+    async def start_offboard(self, north_m: float, east_m: float, down_m: float, yaw_deg: float,
+                             *, source: str = SOURCE_AUTONOMY) -> CommandResult:
+        """Enter offboard holding the given NED point (the current position)."""
+        name = "offboard_start"
+        if self._session_state in _TERMINAL:
+            return CommandResult.rejected(name, "flight session has ended")
+        problem = self._offboard_capable()
+        t = self.get_telemetry()
+        if problem is None and not (t.connected and t.armed and t.airborne):
+            problem = "offboard needs a connected, armed, airborne aircraft"
+        if problem is not None:
+            result = CommandResult.rejected(name, problem)
+            self._record_command(result)
+            self._log_event("rejected", f"{name} rejected: {problem}")
+            return result
+        try:
+            await self._connections.adapter.start_offboard(north_m, east_m, down_m, yaw_deg)
+        except Exception as exc:
+            result = CommandResult(
+                command=name, accepted=False, status=CommandStatus.INTERNAL_ERROR,
+                message=f"drone error: {exc}",
+            )
+            self._record_command(result)
+            self._log_event("error", f"{name} failed: {exc}")
+            return result
+        result = CommandResult.ok(name, f"accepted ({source})")
+        self._record_command(result)
+        self._log_event(name, f"offboard control started ({source})")
+        return result
+
+    async def stop_offboard(self, *, source: str = SOURCE_AUTONOMY) -> CommandResult:
+        name = "offboard_stop"
+        adapter = self._connections.adapter
+        if adapter is None or not callable(getattr(adapter, "stop_offboard", None)):
+            return CommandResult.rejected(name, "not connected")
+        try:
+            await adapter.stop_offboard()
+        except Exception as exc:
+            result = CommandResult(
+                command=name, accepted=False, status=CommandStatus.INTERNAL_ERROR,
+                message=f"drone error: {exc}",
+            )
+            self._record_command(result)
+            self._log_event("error", f"{name} failed: {exc}")
+            return result
+        result = CommandResult.ok(name, f"accepted ({source})")
+        self._record_command(result)
+        self._log_event(name, f"offboard control stopped ({source})")
+        return result
+
+    async def offboard_setpoint(self, setpoint, *, now: float) -> CommandResult:
+        """Send one VantaExecution setpoint, after the flight core's own checks.
+
+        This is the only path from the autonomy stack to the vehicle. It
+        refuses setpoints that are expired, too fast, outside the geofence or
+        inside a no-fly zone, or sent while the aircraft is not airborne.
+        Accepted setpoints are counted, not logged one by one (they stream
+        at 20 Hz); the race session records sampled copies for replay.
+        """
+        name = "offboard_setpoint"
+        problem = None
+        if self._session_state in _TERMINAL:
+            problem = "flight session has ended"
+        else:
+            problem = self._offboard_capable()
+        if problem is None:
+            t = self.get_telemetry()
+            if not (t.connected and t.armed and t.airborne):
+                problem = "aircraft is not armed and airborne"
+        expired = False
+        if problem is None:
+            age = float(now) - float(setpoint.timestamp)
+            if age > AUTONOMY_SETPOINT_MAX_AGE_S:
+                expired = True
+                problem = f"setpoint expired ({age * 1000:.0f} ms old, limit {AUTONOMY_SETPOINT_MAX_AGE_S * 1000:.0f} ms)"
+        if problem is None:
+            speed = float((setpoint.velocity_ned[0] ** 2 + setpoint.velocity_ned[1] ** 2 + setpoint.velocity_ned[2] ** 2) ** 0.5)
+            if speed > AUTONOMY_MAX_SPEED_M_S + 1e-6:
+                problem = f"commanded speed {speed:.1f} m/s exceeds the {AUTONOMY_MAX_SPEED_M_S:g} m/s autonomy limit"
+        if problem is None:
+            north, east, down = (float(v) for v in setpoint.position_ned)
+            breach = self._geofence.violation(east, north, -down)
+            if breach:
+                problem = f"setpoint outside geofence: {breach}"
+            else:
+                for zone in getattr(self._airspace, "zones", ()):
+                    if zone.contains((east, north)):
+                        problem = f"setpoint inside no-fly zone '{zone.name}'"
+                        break
+        if problem is not None:
+            self._offboard_stats["expired" if expired else "rejected"] += 1
+            return CommandResult.rejected(name, problem)
+        try:
+            await self._connections.adapter.set_position_velocity_ned(
+                tuple(float(v) for v in setpoint.position_ned),
+                tuple(float(v) for v in setpoint.velocity_ned),
+                float(setpoint.yaw_deg),
+            )
+        except Exception as exc:
+            self._offboard_stats["rejected"] += 1
+            return CommandResult(
+                command=name, accepted=False, status=CommandStatus.INTERNAL_ERROR,
+                message=f"drone error: {exc}",
+            )
+        self._offboard_stats["sent"] += 1
+        return CommandResult.ok(name, "sent")
+
+    @property
+    def offboard_stats(self) -> dict:
+        return dict(self._offboard_stats)
 
     # -- telemetry ----------------------------------------------------------
     def get_telemetry(self) -> Telemetry:

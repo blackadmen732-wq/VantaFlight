@@ -228,7 +228,20 @@ CREATE INDEX IF NOT EXISTS idx_missions_status
     ON missions(status);
 """
 
-CURRENT_SCHEMA_VERSION = 4
+SCHEMA_V5 = """
+CREATE TABLE IF NOT EXISTS autonomy_samples (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    flight_id  INTEGER NOT NULL REFERENCES flights(id),
+    timestamp  REAL NOT NULL,
+    kind       TEXT NOT NULL,
+    data_json  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_autonomy_samples_flight
+    ON autonomy_samples(flight_id, timestamp);
+"""
+
+CURRENT_SCHEMA_VERSION = 5
 
 
 class FlightDatabase:
@@ -257,6 +270,8 @@ class FlightDatabase:
             version = 3
         if version < 4:
             self._migrate_v4()
+        if version < 5:
+            self._migrate_v5()
 
     def _get_schema_version(self) -> int:
         with self._lock:
@@ -299,7 +314,7 @@ class FlightDatabase:
             self._conn.executescript(SCHEMA_V3)
             self._conn.execute(
                 "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
-                (CURRENT_SCHEMA_VERSION,),
+                (3,),
             )
             self._conn.commit()
 
@@ -309,7 +324,17 @@ class FlightDatabase:
             self._conn.executescript(SCHEMA_V4)
             self._conn.execute(
                 "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
-                (CURRENT_SCHEMA_VERSION,),
+                (4,),
+            )
+            self._conn.commit()
+
+    def _migrate_v5(self) -> None:
+        """Add per-tick autonomy recording (VantaRace closed loop)."""
+        with self._lock:
+            self._conn.executescript(SCHEMA_V5)
+            self._conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
+                (5,),
             )
             self._conn.commit()
 
@@ -370,6 +395,40 @@ class FlightDatabase:
                 ),
             )
             self._conn.commit()
+
+    def record_autonomy_samples(self, flight_id: int, samples: list[tuple[float, str, dict]]) -> None:
+        """Write (timestamp, kind, data) autonomy samples in one transaction."""
+        if not samples:
+            return
+        with self._lock:
+            with self._conn:
+                self._conn.executemany(
+                    "INSERT INTO autonomy_samples (flight_id, timestamp, kind, data_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    [
+                        (flight_id, float(ts), kind, json.dumps(data, separators=(",", ":")))
+                        for ts, kind, data in samples
+                    ],
+                )
+
+    def get_autonomy_samples(self, flight_id: int, kind: str | None = None) -> list[dict]:
+        with self._lock:
+            if kind is None:
+                rows = self._conn.execute(
+                    "SELECT timestamp, kind, data_json FROM autonomy_samples "
+                    "WHERE flight_id = ? ORDER BY timestamp, id",
+                    (flight_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT timestamp, kind, data_json FROM autonomy_samples "
+                    "WHERE flight_id = ? AND kind = ? ORDER BY timestamp, id",
+                    (flight_id, kind),
+                ).fetchall()
+        return [
+            {"timestamp": row[0], "kind": row[1], "data": json.loads(row[2])}
+            for row in rows
+        ]
 
     def record_event(self, flight_id: int, event: FlightEvent) -> None:
         with self._lock:

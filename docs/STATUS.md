@@ -20,7 +20,7 @@ Each claim is reported at the level it was actually reached (see
 | Geofence and stale-link failsafes | INTEGRATION_TESTED (mock), not yet flown on SITL |
 | Routing engine and no-fly zones | INTEGRATION_TESTED |
 | Replay of a recorded flight | SITL_VERIFIED |
-| VantaRace / vision autonomy loop | FAST_SIM_VERIFIED; not started from the app against PX4 |
+| VantaRace / vision autonomy loop | INTEGRATION_TESTED: launchable from the Race page; full loop (VantaSight → VantaState → VantaRace → VantaExecution → offboard) flown closed-loop on the mock, all fault cases ([VANTARACE_SITL.md](VANTARACE_SITL.md)). PX4 SITL harness and CI job written; **not yet SITL_VERIFIED** (Actions not running) |
 | Training campaigns, weakness map, champion/challenger | INTEGRATION_TESTED |
 | Hopper camera-only mode | INTEGRATION_TESTED; needs REAL_CAMERA / HOPPER_OBSERVE on hardware |
 | Hopper live control | Disabled: FTW's control protocol is undocumented |
@@ -28,6 +28,26 @@ Each claim is reported at the level it was actually reached (see
 
 `SITL_VERIFIED` means `simulation/px4/e2e_flight.py` passed against PX4 v1.14.3
 with Gazebo (15/15 stages; see [PX4.md](PX4.md#end-to-end-verification)).
+
+### VantaRace closed loop (on top of V1.0.0)
+
+- [x] Race page: course, perception, speed, finish; start/pause/resume/abort;
+      live loop panel; course map; fault rehearsal
+- [x] `RaceSession`: 20 Hz loop, start-line positioning and gate alignment,
+      commit zone, stale-state hold, setpoint delivery through the flight core
+- [x] Flight-core setpoint gate (expiry, speed, geofence, no-fly); pilot
+      overrides, failsafes and disconnects abort the race
+- [x] Recording (schema v5 `autonomy_samples`) and replay frames
+- [x] Fixed: VantaRace paths cut outside turning gates (waypoints were
+      look-ahead blends, not gate centres); VantaExecution output ENU labelled
+      as NED; PX4 offboard started with a setpoint at the ground (0,0,0);
+      AutonomyLoop left RECOVERING while still holding; simulated camera had
+      no mount transform and painted far gates over near ones
+- [ ] SITL_VERIFIED: `simulation/px4/race_e2e.py` against PX4 + Gazebo
+      (`.github/workflows/sitl.yml`) — pending a passing run
+- Correction: the earlier FAST_SIM_VERIFIED label for this loop overstated
+  it — the fast-sim runner never ran VantaRace (it flew straight at gates)
+  and `AutonomyLoop` had no tests.
 
 ### V1.0.0
 
@@ -64,7 +84,6 @@ with Gazebo (15/15 stages; see [PX4.md](PX4.md#end-to-end-verification)).
 
 - Live Hopper control or program deployment (no official transport)
 - Physical autonomous flight of any kind
-- Starting the VantaRace racing loop from the app against PX4
 - Cloud services, accounts, swarm, voice
 
 ### Known Limitations

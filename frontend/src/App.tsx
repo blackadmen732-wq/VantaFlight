@@ -24,6 +24,7 @@ import ReplayPage from "./pages/ReplayPage";
 import TrainingPage from "./pages/TrainingPage";
 import HopperSetupPage from "./pages/HopperSetupPage";
 import MissionPage from "./pages/MissionPage";
+import RacePage from "./pages/RacePage";
 import TwinPage from "./pages/TwinPage";
 import ForgePage from "./pages/ForgePage";
 import EvolutionPage from "./pages/EvolutionPage";
@@ -210,6 +211,7 @@ function FlightDashboard() {
 const NAV: Array<{ to: string; label: string }> = [
   { to: "/", label: "Control" },
   { to: "/mission", label: "Mission" },
+  { to: "/race", label: "Race" },
   { to: "/twin", label: "Twin" },
   { to: "/forge", label: "VantaForge" },
   { to: "/hopper", label: "Hopper" },
@@ -240,6 +242,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<FlightDashboard />} />
           <Route path="/mission" element={<MissionPage />} />
+          <Route path="/race" element={<RacePage />} />
           <Route path="/twin" element={<TwinPage />} />
           <Route path="/forge" element={<ForgePage />} />
           <Route path="/hopper" element={<HopperSetupPage />} />

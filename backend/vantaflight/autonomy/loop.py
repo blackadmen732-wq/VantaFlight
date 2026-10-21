@@ -12,7 +12,7 @@ import numpy as np
 from ..racing.execution import SimulationExecutionPermit, SimulationOnlyExecutionGuard
 from ..racing.models import AircraftState, DesiredTrajectoryState, GateTarget, TargetSlot
 from ..racing.planner import VantaRace, VantaRaceConfig
-from ..racing.vanta_execution import VantaExecution
+from ..racing.vanta_execution import ExecutionMode, VantaExecution
 from ..runtime.latency import LatencySnapshot
 from ..simulation.runner import SimulationRunner
 from ..simulation.truth import AircraftTruth
@@ -100,15 +100,18 @@ class AutonomyLoop:
         self,
         config: AutonomyConfig | None = None,
         permit: SimulationExecutionPermit | None = None,
+        clock=time.monotonic,
     ) -> None:
         self._config = config or AutonomyConfig()
+        self._clock = clock
         self._state = AutonomyState.IDLE
         self._planner = VantaRace(self._config.race_config)
         self._execution = VantaExecution(
             confidence_floor=self._config.confidence_floor,
             max_setpoint_age_s=self._config.max_setpoint_age_s,
+            clock=clock,
         )
-        self._gate_tracker = GateProgressionTracker()
+        self._gate_tracker = GateProgressionTracker(clock=clock)
         self._permit = permit
         self._metrics = AutonomyMetrics()
         self._loop_task: asyncio.Task | None = None
@@ -162,6 +165,9 @@ class AutonomyLoop:
         aircraft_truth: AircraftTruth,
         gate_targets: list[GateTarget] | None = None,
         sim_runner: SimulationRunner | None = None,
+        *,
+        remaining_targets: list[GateTarget] | None = None,
+        position_uncertainty: float = 0.0,
     ) -> DesiredTrajectoryState | None:
         """Process one tick of the autonomy loop synchronously.
 
@@ -172,7 +178,7 @@ class AutonomyLoop:
         if self._state in (AutonomyState.IDLE, AutonomyState.PAUSED, AutonomyState.COMPLETE, AutonomyState.FAILED):
             return None
 
-        tick_start = time.monotonic()
+        tick_start = time.perf_counter()
 
         if self._state == AutonomyState.INITIALIZING:
             self._state = AutonomyState.RUNNING
@@ -181,8 +187,9 @@ class AutonomyLoop:
             position=aircraft_truth.position,
             velocity=aircraft_truth.velocity,
             acceleration=aircraft_truth.acceleration,
-            yaw=aircraft_truth.yaw_deg,
+            yaw=float(np.radians(aircraft_truth.yaw_deg)),
             timestamp=aircraft_truth.timestamp,
+            position_uncertainty=position_uncertainty,
         )
 
         if self._last_aircraft_pos is not None and sim_runner and sim_runner.truth:
@@ -201,7 +208,10 @@ class AutonomyLoop:
                     return None
         self._last_aircraft_pos = aircraft_truth.position.copy()
 
-        scene = self._build_scene(gate_targets, self._gate_tracker.current_gate_index)
+        if remaining_targets is not None:
+            scene = self._build_scene(remaining_targets, 0)
+        else:
+            scene = self._build_scene(gate_targets, self._gate_tracker.current_gate_index)
 
         try:
             desired = self._planner.plan(
@@ -211,10 +221,6 @@ class AutonomyLoop:
             )
             self._metrics.plans_generated += 1
             self._consecutive_failures = 0
-
-            if self._state == AutonomyState.RECOVERING:
-                self._state = AutonomyState.RUNNING
-                self._metrics.recovery_events += 1
 
         except Exception as e:
             logger.warning("Planning failed: %s", e)
@@ -228,19 +234,45 @@ class AutonomyLoop:
             return None
 
         setpoint = self._execution.translate(desired)
+        holding = self._execution.mode == ExecutionMode.HOLD
+        if holding and self._state != AutonomyState.RECOVERING:
+            # Not enough confidence to fly the plan: hold and wait for the
+            # perception to recover (the hold point was latched last tick).
+            self._state = AutonomyState.RECOVERING
+            self._metrics.recovery_events += 1
+        elif not holding and self._state == AutonomyState.RECOVERING:
+            self._state = AutonomyState.RUNNING
         if setpoint is not None:
             self._metrics.setpoints_sent += 1
             for callback in self._on_setpoint:
                 callback(setpoint)
-            self._execution.update_hold_position(aircraft_truth.position)
+        if not holding:
+            # Latch the hold point only while flying the plan, so a hold
+            # brakes back to where confidence was lost instead of drifting.
+            self._execution.update_hold_position(
+                aircraft_truth.position, aircraft_truth.yaw_deg
+            )
 
         self._metrics.loop_iterations += 1
-        elapsed = time.monotonic() - tick_start
+        elapsed = time.perf_counter() - tick_start
         self._loop_times.append(elapsed)
         if len(self._loop_times) > 200:
             self._loop_times = self._loop_times[-100:]
 
         return desired
+
+    def record_gate_pass(self, gate_id: str) -> GatePassEvent | None:
+        """Record an (ordered) gate pass detected by the caller."""
+        if self._state in (AutonomyState.IDLE, AutonomyState.COMPLETE, AutonomyState.FAILED):
+            return None
+        event = self._gate_tracker.record_pass(gate_id)
+        self._metrics.gate_passes += 1
+        for callback in self._on_gate_pass:
+            callback(event)
+        if self._gate_tracker.is_complete:
+            self._state = AutonomyState.COMPLETE
+            logger.info("Race complete! All gates passed.")
+        return event
 
     def stop(self) -> None:
         self._running = False

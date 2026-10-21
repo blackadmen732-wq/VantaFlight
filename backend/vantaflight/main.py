@@ -40,7 +40,8 @@ from .course_lab import CourseGenerator, CourseValidator, SafeVolume
 from .data import AsyncRecorder, FlightDatabase
 from .intelligence import IntelligenceRuntime
 from .models import AdapterType, CommandResult
-from .autonomy import AutonomyLoop, AutonomyConfig
+from .autonomy.courses import check_course, course_from_spec, preset_courses
+from .autonomy.race_session import RaceConfig, RaceSession
 from .digital_twin.live import LiveTwinPublisher
 from .evolution import ChampionChallengerEvaluator
 from .evolution.training_bridge import run_packages, weakness_report
@@ -129,6 +130,28 @@ class CreateMissionRequest(BaseModel):
     return_home: bool = True
     max_duration_s: float = 600.0
 
+class RaceStartRequest(BaseModel):
+    #: A preset course id, or a custom ``course`` ({"name", "gates": [{"x","y","z"}]}).
+    course_id: str | None = None
+    course: dict[str, Any] | None = None
+    perception: str = "vision"
+    speed_m_s: float = Field(default=3.0, gt=0)
+    aggression: float = Field(default=0.35, ge=0, le=1)
+    finish: str = "land"
+
+
+class RaceCourseRequest(BaseModel):
+    course_id: str | None = None
+    course: dict[str, Any] | None = None
+
+
+class RaceFaultRequest(BaseModel):
+    kind: str
+    duration_s: float = Field(default=2.0, gt=0, le=60)
+    value: float | None = None
+    gate_id: str | None = None
+
+
 class ReplaySeekRequest(BaseModel):
     time_offset: float = 0.0
 
@@ -188,6 +211,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            with contextlib.suppress(Exception):
+                await race_session.abort("backend shutting down")
             await recorder.stop()
             db.close()
 
@@ -247,7 +272,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
     replay_player = ReplayPlayer()
     hw_mode_manager = HardwareModeManager()
     preflight_checker = PreflightChecker()
-    autonomy_loop = AutonomyLoop()
+    race_session = RaceSession(controller)
+    controller.attach_autonomy(race_session)
+    app.state.race_session = race_session
+
+    def autonomy_snapshot() -> dict:
+        # The twin and /api/autonomy/status show the live race loop (idle
+        # placeholder until a race has been started).
+        loop = race_session.loop
+        if loop is not None:
+            return loop.to_dict()
+        return {
+            "state": "IDLE", "metrics": {}, "gate_progression": {},
+            "execution": {}, "planner_state": "IDLE",
+        }
     twin_builder = TwinSnapshotBuilder()
     twin_publisher = LiveTwinPublisher(twin_builder)
     mission_registry = MissionRegistry()
@@ -284,9 +322,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         await hub.broadcast(
             {"type": "simulation_state", "data": intelligence.simulation.model_dump(mode="json")}
         )
-        await hub.broadcast({"type": "autonomy_state", "data": autonomy_loop.to_dict()})
+        autonomy = autonomy_snapshot()
+        await hub.broadcast({"type": "autonomy_state", "data": autonomy})
+        if race_session.state.value != "IDLE":
+            await hub.broadcast({"type": "vantarace", "data": race_session.status()})
         twin_publisher.publish(
-            telemetry, controller.mission, controller.airspace, autonomy_loop.to_dict()
+            telemetry, controller.mission, controller.airspace, autonomy
         )
         snapshot = twin_builder.build()
         _twin_snapshot["ref"] = snapshot
@@ -668,7 +709,77 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/autonomy/status")
     async def autonomy_status() -> dict:
-        return autonomy_loop.to_dict()
+        return autonomy_snapshot()
+
+    # -- VantaRace closed loop (simulation only) -------------------------------
+    def _race_course(course_id: str | None, spec: dict | None):
+        if spec:
+            return course_from_spec(spec)
+        courses = preset_courses()
+        if course_id not in courses:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown course '{course_id}'; available: {sorted(courses)}",
+            )
+        return courses[course_id]
+
+    @app.get("/api/vantarace")
+    async def vantarace_status() -> dict:
+        return race_session.status()
+
+    @app.get("/api/vantarace/courses")
+    async def vantarace_courses() -> dict:
+        return {"courses": [c.to_dict() for c in preset_courses().values()]}
+
+    @app.post("/api/vantarace/check")
+    async def vantarace_check(req: RaceCourseRequest) -> dict:
+        try:
+            course = _race_course(req.course_id, req.course)
+        except ValueError as exc:
+            return {"valid": False, "errors": [str(exc)], "warnings": [], "length_m": 0.0}
+        return check_course(course, controller.geofence, controller.airspace).to_dict()
+
+    @app.post("/api/vantarace/start")
+    async def vantarace_start(req: RaceStartRequest) -> dict:
+        try:
+            course = _race_course(req.course_id, req.course)
+            config = RaceConfig(
+                perception=req.perception, speed_m_s=req.speed_m_s,
+                aggression=req.aggression, finish=req.finish,
+            )
+        except ValueError as exc:
+            return {"accepted": False, "message": str(exc), "state": race_session.state.value}
+        return await race_session.start(course, config)
+
+    @app.post("/api/vantarace/pause")
+    async def vantarace_pause() -> dict:
+        return await race_session.pause()
+
+    @app.post("/api/vantarace/resume")
+    async def vantarace_resume() -> dict:
+        return await race_session.resume()
+
+    @app.post("/api/vantarace/abort")
+    async def vantarace_abort() -> dict:
+        return await race_session.abort("aborted by operator")
+
+    @app.post("/api/vantarace/fault")
+    async def vantarace_fault(req: RaceFaultRequest) -> dict:
+        """Rehearse perception/pipeline faults during a simulated race."""
+        try:
+            message = race_session.inject_fault(req.kind, req.duration_s, req.value, req.gate_id)
+        except ValueError as exc:
+            return {"accepted": False, "message": str(exc)}
+        return {"accepted": True, "message": message}
+
+    @app.get("/api/vantarace/recording/{flight_id}")
+    async def vantarace_recording(flight_id: int, kind: str | None = None, limit: int = 2000) -> dict:
+        samples = db.get_autonomy_samples(flight_id, kind)
+        return {
+            "flight_id": flight_id,
+            "count": len(samples),
+            "samples": samples[-max(1, min(limit, 20000)):],
+        }
 
     @app.get("/api/twin/snapshot")
     async def twin_snapshot() -> dict:

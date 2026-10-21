@@ -5,7 +5,8 @@ export type FlightMode =
   | "LANDING"
   | "LAND"
   | "MISSION"
-  | "RETURNING";
+  | "RETURNING"
+  | "OFFBOARD";
 
 export type ConnectionQuality =
   | "NONE"
@@ -419,7 +420,8 @@ export type WsFrame =
   | { type: "run_metric"; data: RunMetric }
   | { type: "mission"; data: MissionStatus }
   | { type: "autonomy_state"; data: AutonomyState }
-  | { type: "twin_snapshot"; data: TwinWorldSnapshot };
+  | { type: "twin_snapshot"; data: TwinWorldSnapshot }
+  | { type: "vantarace"; data: VantaRaceStatus };
 
 export interface RuntimeState {
   overall: string;
@@ -667,4 +669,133 @@ export interface EvolutionComparison {
   metric: string;
   champion: CandidateScore;
   challenger: CandidateScore;
+}
+
+// -- VantaRace closed loop (simulation only) ----------------------------------
+
+export type VantaRaceState =
+  | "IDLE"
+  | "PREPARING"
+  | "RUNNING"
+  | "RECOVERING"
+  | "HOLDING_STALE"
+  | "PAUSED"
+  | "FINISHING"
+  | "COMPLETE"
+  | "ABORTED"
+  | "FAILED";
+
+export const ACTIVE_RACE_STATES: VantaRaceState[] = [
+  "PREPARING",
+  "RUNNING",
+  "RECOVERING",
+  "HOLDING_STALE",
+  "PAUSED",
+  "FINISHING",
+];
+
+export type RacePerception = "vision" | "scene";
+export type RaceFinish = "land" | "return_home" | "hold";
+export type RaceFaultKind = "vision_blackout" | "low_confidence" | "occlude_gate" | "state_stall" | "setpoint_delay";
+
+export interface RaceGate {
+  gate_id: string;
+  position: number[];
+  normal: number[];
+  width: number;
+  height: number;
+  yaw_deg: number;
+  pitch_deg: number;
+  order: number;
+}
+
+export interface RaceCourse {
+  course_id: string;
+  name: string;
+  description: string;
+  start_altitude_m: number;
+  max_time_s: number;
+  length_m: number;
+  gates: RaceGate[];
+  tags: string[];
+}
+
+export interface RaceCourseCheck {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  length_m: number;
+}
+
+export interface RaceStartOptions {
+  course_id: string;
+  perception: RacePerception;
+  speed_m_s: number;
+  aggression?: number;
+  finish: RaceFinish;
+}
+
+export interface RaceActionResult {
+  accepted: boolean;
+  message: string;
+  state?: VantaRaceState;
+}
+
+export interface RacePerceptionTarget {
+  gate_id: string;
+  slot: "CURRENT" | "NEXT" | "FUTURE";
+  confidence: number;
+  uncertainty: number;
+  position_enu: number[];
+}
+
+export interface RacePerceptionFrame {
+  timestamp: number;
+  status: "TRACKING" | "DEGRADED" | "COMMITTED" | "LOST" | "BLACKOUT";
+  frame_processed: boolean;
+  detections: number;
+  observations: { gate_id: string; confidence: number; error_m: number; distance_m: number }[];
+  targets: RacePerceptionTarget[];
+  current_confidence: number;
+  current_gate_age_s: number | null;
+  processing_ms: number;
+}
+
+export interface RaceStats {
+  ticks: number;
+  setpoints_sent: number;
+  setpoints_rejected: number;
+  setpoints_expired: number;
+  hold_setpoints: number;
+  recoveries: number;
+  reacquisitions: number;
+  stale_telemetry_events: number;
+  gates_missed: number;
+  avg_tick_ms: number;
+  max_tick_ms: number;
+  max_tracking_error_m: number;
+  gate_pass_offsets_m: number[];
+}
+
+export interface VantaRaceStatus {
+  state: VantaRaceState;
+  message: string;
+  course: RaceCourse | null;
+  config: { perception: RacePerception; speed_m_s: number; aggression: number; finish: RaceFinish };
+  gates_passed: number;
+  total_gates: number;
+  next_gate: string | null;
+  passes: { gate_id: string; time_s: number; offset_m: number }[];
+  race_time_s: number;
+  elapsed_s: number;
+  perception: RacePerceptionFrame | null;
+  perception_status: RacePerceptionFrame["status"] | null;
+  perception_faults: { vision_blackout_s: number; confidence_scale: number; occluded_gates: string[] } | null;
+  autonomy: {
+    state: string;
+    planner_state: string;
+    execution: { mode?: string; metrics?: { last_setpoint_age_ms?: number } };
+  } | null;
+  stats: RaceStats;
+  offboard: { sent: number; rejected: number; expired: number };
 }

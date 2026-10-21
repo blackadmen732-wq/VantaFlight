@@ -10,6 +10,7 @@ from .telemetry import (
     Telemetry,
     TelemetrySource,
 )
+from .local_state import LocalState
 
 __all__ = [
     "AdapterType",
@@ -20,6 +21,7 @@ __all__ = [
     "ConnectionQuality",
     "FlightEvent",
     "FlightMode",
+    "LocalState",
     "Telemetry",
     "TelemetrySource",
 ]

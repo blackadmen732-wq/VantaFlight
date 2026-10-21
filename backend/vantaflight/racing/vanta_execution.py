@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ..frames import enu_to_ned, enu_yaw_deg_to_ned
 from .execution import (
     AutonomousExecutionRejected,
     SimulationExecutionPermit,
@@ -73,8 +74,13 @@ class ExecutionMetrics:
 class VantaExecution:
     """Translates VantaRace trajectory output to PX4 offboard commands.
 
+    Frames: the planner works in local ENU (x east, y north, z up, yaw CCW
+    from east, radians). `OffboardSetpoint` is true PX4 local NED (x north,
+    y east, z down, yaw clockwise from north, degrees). Hold positions are
+    given in ENU like everything else upstream.
+
     Responsibilities:
-    - Convert DesiredTrajectoryState (local frame) to NED offboard setpoints
+    - Convert DesiredTrajectoryState (local ENU) to NED offboard setpoints
     - Enforce confidence floor — drops to HOLD if planner confidence too low
     - Rate-limit setpoints to match PX4 offboard expectations (~50 Hz)
     - Track execution metrics
@@ -86,12 +92,17 @@ class VantaExecution:
     - Send any command without a valid permit
     """
 
+    #: Below this planned horizontal speed the yaw is held rather than taken
+    #: from the (noisy, near-zero) velocity direction.
+    YAW_FROM_VELOCITY_MIN_SPEED = 0.5
+
     def __init__(
         self,
         *,
         confidence_floor: float = 0.15,
         max_setpoint_age_s: float = 0.5,
         hold_position: np.ndarray | None = None,
+        clock=time.monotonic,
     ) -> None:
         self._confidence_floor = confidence_floor
         self._max_setpoint_age = max_setpoint_age_s
@@ -100,6 +111,8 @@ class VantaExecution:
         self._last_setpoint: OffboardSetpoint | None = None
         self._last_send_time: float = 0.0
         self._hold_position = hold_position if hold_position is not None else np.zeros(3)
+        self._hold_yaw_enu_deg = 0.0
+        self._clock = clock
         self._metrics = ExecutionMetrics()
 
     @property
@@ -111,7 +124,7 @@ class VantaExecution:
         self._metrics.mode = self._mode
         if self._last_setpoint:
             self._metrics.last_setpoint_age_ms = (
-                (time.monotonic() - self._last_send_time) * 1000.0
+                (self._clock() - self._last_send_time) * 1000.0
             )
         return self._metrics
 
@@ -142,7 +155,7 @@ class VantaExecution:
 
         SimulationOnlyExecutionGuard.validate_permit(self._permit)
 
-        age = time.monotonic() - desired.timestamp if desired.timestamp > 0 else 0.0
+        age = self._clock() - desired.timestamp if desired.timestamp > 0 else 0.0
         if age > self._max_setpoint_age:
             self._metrics.setpoints_rejected += 1
             logger.debug("Stale trajectory rejected (age=%.3fs)", age)
@@ -163,39 +176,57 @@ class VantaExecution:
             self._mode = ExecutionMode.OFFBOARD_POSITION
             logger.info("Confidence recovered, resuming offboard position")
 
+        velocity_enu = np.array(desired.velocity, dtype=np.float64)
+        if float(np.hypot(velocity_enu[0], velocity_enu[1])) >= self.YAW_FROM_VELOCITY_MIN_SPEED:
+            yaw_enu_deg = float(np.degrees(desired.yaw))
+        else:
+            yaw_enu_deg = self._hold_yaw_enu_deg
         setpoint = OffboardSetpoint(
-            position_ned=np.array(desired.position, dtype=np.float64),
-            velocity_ned=np.array(desired.velocity, dtype=np.float64),
-            acceleration_ned=np.array(desired.acceleration, dtype=np.float64),
-            yaw_deg=float(np.degrees(desired.yaw)),
+            position_ned=enu_to_ned(desired.position),
+            velocity_ned=enu_to_ned(velocity_enu),
+            acceleration_ned=enu_to_ned(desired.acceleration),
+            yaw_deg=enu_yaw_deg_to_ned(yaw_enu_deg),
             timestamp=desired.timestamp,
             trajectory_id=desired.trajectory_id,
             confidence=desired.planner_confidence,
         )
 
         self._last_setpoint = setpoint
-        self._last_send_time = time.monotonic()
+        self._last_send_time = self._clock()
         self._metrics.setpoints_sent += 1
         return setpoint
 
     def _hold_setpoint(self, timestamp: float, trajectory_id: str) -> OffboardSetpoint:
         return OffboardSetpoint(
-            position_ned=self._hold_position.copy(),
+            position_ned=enu_to_ned(self._hold_position),
             velocity_ned=np.zeros(3),
             acceleration_ned=np.zeros(3),
-            yaw_deg=0.0,
+            yaw_deg=enu_yaw_deg_to_ned(self._hold_yaw_enu_deg),
             timestamp=timestamp,
             trajectory_id=trajectory_id,
             confidence=0.0,
         )
 
-    def update_hold_position(self, position: np.ndarray) -> None:
+    def update_hold_position(self, position: np.ndarray, yaw_enu_deg: float | None = None) -> None:
+        """Latch where (ENU) and facing which way (ENU yaw) a HOLD keeps the aircraft."""
         self._hold_position = np.array(position, dtype=np.float64)
+        if yaw_enu_deg is not None:
+            self._hold_yaw_enu_deg = float(yaw_enu_deg)
+
+    def set_hold_yaw(self, yaw_enu_deg: float) -> None:
+        self._hold_yaw_enu_deg = float(yaw_enu_deg)
+
+    def hold_setpoint(self, timestamp: float, trajectory_id: str = "hold") -> OffboardSetpoint | None:
+        """A hold-position setpoint, if execution is active (used while paused)."""
+        if self._mode == ExecutionMode.IDLE or self._permit is None:
+            return None
+        SimulationOnlyExecutionGuard.validate_permit(self._permit)
+        return self._hold_setpoint(timestamp, trajectory_id)
 
     def is_setpoint_stale(self) -> bool:
         if self._last_send_time <= 0:
             return True
-        return (time.monotonic() - self._last_send_time) > self._max_setpoint_age
+        return (self._clock() - self._last_send_time) > self._max_setpoint_age
 
     def to_dict(self) -> dict:
         return {

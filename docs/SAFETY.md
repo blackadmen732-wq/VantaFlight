@@ -34,8 +34,11 @@ because FTW's control protocol is not documented.
 - No autonomous behavior is hardware verified.
 
 `VantaExecution` converts VantaRace output to PX4 offboard setpoints only
-behind this guard. The desktop app does not start the racing loop against
-PX4; waypoint missions use PX4's own `goto_location` and RTL.
+behind this guard. The Race page can start the racing loop against PX4 SITL
+or the mock; every setpoint then also passes `FlightController.offboard_setpoint`
+(expiry, speed cap, geofence, no-fly zones, armed/airborne), and failsafes and
+pilot commands abort the race. See [VANTARACE_SITL.md](VANTARACE_SITL.md).
+Waypoint missions use PX4's own `goto_location` and RTL.
 
 ## Session Safety
 

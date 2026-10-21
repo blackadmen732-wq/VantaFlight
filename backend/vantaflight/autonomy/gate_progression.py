@@ -25,7 +25,8 @@ class GateProgressionTracker:
     history of gate pass events for the current race.
     """
 
-    def __init__(self, total_gates: int = 0) -> None:
+    def __init__(self, total_gates: int = 0, clock=time.monotonic) -> None:
+        self._clock = clock
         self._total_gates = total_gates
         self._passed: list[GatePassEvent] = []
         self._current_gate_index = 0
@@ -55,13 +56,13 @@ class GateProgressionTracker:
     def race_time_s(self) -> float:
         if self._race_start_time is None:
             return 0.0
-        return time.monotonic() - self._race_start_time
+        return self._clock() - self._race_start_time
 
     def start_race(self, total_gates: int) -> None:
         self._total_gates = total_gates
         self._passed.clear()
         self._current_gate_index = 0
-        self._race_start_time = time.monotonic()
+        self._race_start_time = self._clock()
 
     def check_crossing(
         self,
@@ -78,7 +79,19 @@ class GateProgressionTracker:
 
         event = GatePassEvent(
             gate_id=gate_id,
-            pass_time=time.monotonic(),
+            pass_time=self._clock(),
+            gate_order=self._current_gate_index,
+            total_gates=self._total_gates,
+            race_time_s=self.race_time_s,
+        )
+        self._passed.append(event)
+        self._current_gate_index += 1
+        return event
+
+    def record_pass(self, gate_id: str) -> GatePassEvent:
+        event = GatePassEvent(
+            gate_id=gate_id,
+            pass_time=self._clock(),
             gate_order=self._current_gate_index,
             total_gates=self._total_gates,
             race_time_s=self.race_time_s,

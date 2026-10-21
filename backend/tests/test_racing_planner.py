@@ -72,8 +72,16 @@ def test_unified_planner_combines_gate_lookahead_speed_envelope_and_retiming() -
 
     assert planner.state is RaceState.ACQUIRE
     assert desired.position[0] > 0
-    assert desired.position[1] > 0
     assert planner._trajectory is not None
+    # The path goes straight through the CURRENT gate's centre (dead ahead at
+    # y=0) and only then bends toward NEXT/FUTURE. Aiming at the blended
+    # look-ahead point instead cut corners outside the gate opening.
+    positions = planner._trajectory.positions
+    through_centre = np.linalg.norm(positions - np.array([6.0, 0.0, 0.0]), axis=1)
+    centre_index = int(np.argmin(through_centre))
+    assert through_centre[centre_index] < 0.5
+    assert abs(desired.position[1]) < 0.05
+    assert np.all(positions[centre_index + 1 :, 1] > 0)
     assert planner._trajectory.positions[-1, 1] > 9.0
     assert len(planner.last_speed_profile) == config.trajectory_samples
     ds = np.diff(planner.last_sample_distances)

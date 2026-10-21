@@ -27,6 +27,12 @@ import type {
   PerformanceState,
   PlanReport,
   QgcPlan,
+  RaceActionResult,
+  RaceCourse,
+  RaceCourseCheck,
+  RaceFaultKind,
+  RaceStartOptions,
+  VantaRaceStatus,
   RaceStateFrame,
   RoutePlan,
   RunMetric,
@@ -104,6 +110,15 @@ async function get<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** POST that never throws; failures come back as a not-accepted result. */
+async function postAction(path: string, body?: unknown): Promise<RaceActionResult> {
+  try {
+    return await postJson<RaceActionResult>(path, body);
+  } catch (err) {
+    return { accepted: false, message: err instanceof Error ? err.message : "flight core unreachable" };
+  }
+}
+
 export const api = {
   connect: (adapterType?: AdapterType) =>
     post("/api/connect", adapterType ? { adapter_type: adapterType } : undefined),
@@ -115,6 +130,18 @@ export const api = {
   hold: () => post("/api/hold"),
   land: () => post("/api/land"),
   returnHome: () => post("/api/return-home"),
+
+  vantarace: {
+    status: () => get<VantaRaceStatus>("/api/vantarace"),
+    courses: () => get<{ courses: RaceCourse[] }>("/api/vantarace/courses").then((r) => r.courses),
+    check: (courseId: string) => postJson<RaceCourseCheck>("/api/vantarace/check", { course_id: courseId }),
+    start: (options: RaceStartOptions) => postAction("/api/vantarace/start", options),
+    pause: () => postAction("/api/vantarace/pause"),
+    resume: () => postAction("/api/vantarace/resume"),
+    abort: () => postAction("/api/vantarace/abort"),
+    fault: (kind: RaceFaultKind, durationS: number, value?: number) =>
+      postAction("/api/vantarace/fault", { kind, duration_s: durationS, value }),
+  },
 
   mission: {
     status: () => get<MissionStatus>("/api/mission"),

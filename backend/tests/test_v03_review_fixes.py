@@ -226,8 +226,13 @@ class TestPX4FlightModeNormalization:
         assert mode == FlightMode.HOLD
 
     def test_unknown_airborne_defaults_to_hold(self):
-        mode = PX4SITLAdapter._map_flight_mode("FlightMode.OFFBOARD", True)
+        mode = PX4SITLAdapter._map_flight_mode("FlightMode.POSCTL", True)
         assert mode == FlightMode.HOLD
+
+    def test_offboard_is_recognised(self):
+        # VantaRace needs to see PX4 in offboard; it is no longer an unknown mode.
+        mode = PX4SITLAdapter._map_flight_mode("FlightMode.OFFBOARD", True)
+        assert mode == FlightMode.OFFBOARD
 
     def test_unknown_grounded_defaults_to_idle(self):
         mode = PX4SITLAdapter._map_flight_mode("FlightMode.MANUAL", False)

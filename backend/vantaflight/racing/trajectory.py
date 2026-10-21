@@ -173,6 +173,13 @@ def trajectory_through_gates(
     for index, gate in enumerate(gates):
         following = gates[index + 1] if index + 1 < len(gates) else None
         future = gates[index + 2] if index + 2 < len(gates) else None
+        # The path must pass through the gate's centre. The lookahead target
+        # (exit point bent toward later gates) only shapes the exit: used on
+        # its own it cuts the corner outside the opening on any turning course.
+        previous = positions[-1]
+        signed = float(np.dot(previous - gate.position, gate.normal))
+        if signed < -0.2 and float(np.linalg.norm(gate.position - previous)) > 0.3:
+            positions.append(np.array(gate.position, dtype=np.float64))
         positions.append(lookahead_gate_position(gate, following, future, lookahead))
     distances = np.linalg.norm(np.diff(np.asarray(positions), axis=0), axis=1)
     durations = np.maximum(distances / speed, 1e-3)

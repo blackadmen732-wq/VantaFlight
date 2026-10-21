@@ -124,6 +124,14 @@ class ReplayLoader:
                 },
             ))
 
+        # VantaRace closed-loop samples: vision, state, planner, execution.
+        for sample in self._db.get_autonomy_samples(flight_id):
+            frames.append(ReplayFrame(
+                timestamp=sample["timestamp"],
+                frame_type="autonomy",
+                data={"kind": sample["kind"], **sample["data"]},
+            ))
+
         frames.sort(key=lambda f: f.timestamp)
 
         if frames:
