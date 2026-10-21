@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Optional, TypeVar
 
 from .config import MAVLinkConfig
+from ..core.clock import ClockDomain, TimeStamp, VantaClock, default_clock
 
 logger = logging.getLogger(__name__)
 
@@ -92,15 +93,23 @@ class PX4Telemetry:
     pitch_deg: float = 0.0
     yaw_deg: float = 0.0
 
+    #: time.monotonic() of the last message (0 = never). Link age is measured
+    #: on this clock; last_message_at (wall) is only for records.
+    last_message_mono: float = 0.0
+    #: Vehicle boot time (µs) of the last attitude sample, 0 if unknown.
+    attitude_boot_us: int = 0
+
     def touch(self) -> None:
         self.last_message_at = time.time()
+        self.last_message_mono = time.monotonic()
 
 
 class MAVSDKClient:
     """Mockable MAVSDK boundary for PX4 SITL control."""
 
-    def __init__(self, config: MAVLinkConfig | None = None) -> None:
+    def __init__(self, config: MAVLinkConfig | None = None, clock: VantaClock | None = None) -> None:
         self._config = config or MAVLinkConfig()
+        self._clock = clock or default_clock()
         self._system = None
         self._connected = False
         self._telemetry = PX4Telemetry()
@@ -283,9 +292,7 @@ class MAVSDKClient:
             tel.local_received_at = time.monotonic()
 
         def _attitude(att) -> None:
-            tel.roll_deg = att.roll_deg
-            tel.pitch_deg = att.pitch_deg
-            tel.yaw_deg = att.yaw_deg
+            self.apply_attitude(att)
 
         def _home(home) -> None:
             tel.home_latitude_deg = home.latitude_deg
@@ -327,6 +334,32 @@ class MAVSDKClient:
             for t in tasks:
                 t.cancel()
             raise
+
+    @property
+    def vehicle_clock_id(self) -> str:
+        return f"px4:{self._config.system_address}"
+
+    def apply_attitude(self, att, received_ns: int | None = None) -> None:
+        """Store an attitude sample and feed its PX4 boot timestamp to VantaClock.
+
+        Each sample pairs the vehicle's boot clock with our receive time, so
+        VantaClock can map VEHICLE_BOOT timestamps onto host time.
+        """
+        tel = self._telemetry
+        tel.roll_deg = att.roll_deg
+        tel.pitch_deg = att.pitch_deg
+        tel.yaw_deg = att.yaw_deg
+        boot_us = int(getattr(att, "timestamp_us", 0) or 0)
+        tel.attitude_boot_us = boot_us
+        if boot_us > 0:
+            host = TimeStamp(
+                received_ns if received_ns is not None else self._clock.now().value_ns,
+                ClockDomain.HOST_MONOTONIC,
+            )
+            self._clock.observe(
+                TimeStamp(boot_us * 1000, ClockDomain.VEHICLE_BOOT, clock_id=self.vehicle_clock_id),
+                host,
+            )
 
     async def start_offboard(
         self, north_m: float, east_m: float, down_m: float, yaw_deg: float,

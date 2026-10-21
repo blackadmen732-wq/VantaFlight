@@ -114,7 +114,13 @@ class PX4SITLAdapter:
 
         connected = self._connected and self._client.connected
         now = time.time()
-        link_age = max(0.0, now - px4.last_message_at) if px4.last_message_at else 0.0
+        # Link age on the monotonic clock: wall time can jump (NTP), which
+        # would fake a stale or fresh link. Wall time only stamps records.
+        last_mono = getattr(px4, "last_message_mono", 0.0)
+        if last_mono:
+            link_age = max(0.0, time.monotonic() - last_mono)
+        else:
+            link_age = max(0.0, now - px4.last_message_at) if px4.last_message_at else 0.0
         quality = self._grade_link(connected, link_age, px4.health_all_ok)
 
         x = y = 0.0
