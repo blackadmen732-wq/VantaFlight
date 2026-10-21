@@ -150,13 +150,18 @@ async def test_clean_landing_and_replay_after_completion():
 
     flight_id = h.controller.flight_id
     kinds = {s["kind"] for s in h.db.get_autonomy_samples(flight_id)}
-    assert {"race_sample", "race_event", "race_summary"} <= kinds
-    sample = h.db.get_autonomy_samples(flight_id, "race_sample")[-1]["data"]
+    assert {"race.sample", "race.event", "race.summary"} <= kinds
+    envelope = h.db.get_autonomy_samples(flight_id, "race.sample")[-1]["data"]
+    assert envelope["schema_version"] == 1 and envelope["topic"] == "race.sample"
     for key in ("vision", "state", "planner", "execution"):
-        assert key in sample
+        assert key in envelope["payload"]
+    assert envelope["payload"]["state"]["position"]["frame"] == "world_enu"
     timeline = ReplayLoader(h.db).load_timeline(flight_id)
     autonomy = [f for f in timeline.frames if f.frame_type == "autonomy"]
-    assert autonomy and any(f.data["kind"] == "race_summary" for f in autonomy)
+    assert autonomy and all("decode_error" not in f.data for f in autonomy)
+    assert any(f.data["topic"] == "race.summary" for f in autonomy)
+    summary = next(f.data["data"] for f in autonomy if f.data["topic"] == "race.summary")
+    assert summary["state"] == "COMPLETE" and summary["gates_passed"] == 3
     for event in ("race_started", "race_running", "race_gate_passed", "race_completed", "offboard_start", "offboard_stop"):
         assert event in h.events()
 
@@ -255,9 +260,9 @@ async def test_a_race_ended_outside_the_loop_records_its_final_event_and_summary
         await h.fly_until(lambda: not h.session.active, timeout=2.0)
     assert h.state() == RaceState.ABORTED
     rows = h.db.get_autonomy_samples(h.controller.flight_id)
-    assert rows[-1]["kind"] == "race_summary", [r["kind"] for r in rows[-3:]]
-    assert rows[-1]["data"]["state"] == "ABORTED"
-    events = [r["data"]["event_type"] for r in rows if r["kind"] == "race_event"]
+    assert rows[-1]["kind"] == "race.summary", [r["kind"] for r in rows[-3:]]
+    assert rows[-1]["data"]["payload"]["state"] == "ABORTED"
+    events = [r["data"]["payload"]["event_type"] for r in rows if r["kind"] == "race.event"]
     assert events[-1] == "race_aborted"
     await h.fly(1.0)  # nothing is written twice once the race is over
     assert len(h.db.get_autonomy_samples(h.controller.flight_id)) == len(rows)

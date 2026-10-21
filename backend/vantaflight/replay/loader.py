@@ -1,6 +1,7 @@
 """Load flight recordings from the database into replay timelines."""
 from __future__ import annotations
 
+from ..contracts.records import decode_record, record_view
 from ..data import FlightDatabase
 from .models import FlightSummary, ReplayFrame, ReplayTimeline
 
@@ -124,12 +125,21 @@ class ReplayLoader:
                 },
             ))
 
-        # VantaRace closed-loop samples: vision, state, planner, execution.
-        for sample in self._db.get_autonomy_samples(flight_id):
+        # VantaRace closed-loop records, decoded (and migrated) through the
+        # contract registry: vision, state, planner, execution, events.
+        for index, sample in enumerate(self._db.get_autonomy_samples(flight_id)):
+            try:
+                envelope = decode_record(
+                    sample["kind"], sample["timestamp"], sample["data"],
+                    index=index, run_key=f"flight:{flight_id}",
+                )
+                data = record_view(envelope, sample["timestamp"])
+            except Exception as exc:  # a corrupt row must not hide the rest
+                data = {"topic": sample["kind"], "kind": sample["kind"], "decode_error": str(exc)}
             frames.append(ReplayFrame(
                 timestamp=sample["timestamp"],
                 frame_type="autonomy",
-                data={"kind": sample["kind"], **sample["data"]},
+                data=data,
             ))
 
         frames.sort(key=lambda f: f.timestamp)

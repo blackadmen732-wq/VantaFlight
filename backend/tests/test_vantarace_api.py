@@ -80,5 +80,11 @@ def test_start_run_pause_resume_abort_over_http(client: TestClient):
 
     flight_id = client.get("/api/diagnostics").json()["flight_id"]
     recording = client.get(f"/api/vantarace/recording/{flight_id}").json()
-    kinds = {s["kind"] for s in recording["samples"]}
-    assert {"race_sample", "race_event", "race_summary"} <= kinds
+    kinds = {s["topic"] for s in recording["samples"]}
+    assert {"race.sample", "race.event", "race.summary"} <= kinds
+    assert recording["decode_errors"] == 0
+    samples = client.get(f"/api/vantarace/recording/{flight_id}?kind=race.sample").json()["samples"]
+    assert samples and {"vision", "state", "planner", "execution"} <= set(samples[-1]["data"])
+    contracts = client.get("/api/contracts").json()
+    assert "vehicle.state" in contracts["flight_critical"]
+    assert client.get("/api/clock").json()["canonical"] == "HOST_MONOTONIC"

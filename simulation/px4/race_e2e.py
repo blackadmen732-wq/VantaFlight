@@ -297,7 +297,7 @@ def main() -> int:
         flights = api.get("/api/replay/flights")["flights"]
         fid = max(flights, key=lambda f: f["flight_id"])["flight_id"]
         loaded = api.post(f"/api/replay/load/{fid}")
-        rec = api.get(f"/api/vantarace/recording/{fid}?kind=race_sample&limit=1")
+        rec = api.get(f"/api/vantarace/recording/{fid}?kind=race.sample&limit=1")
         sample = (rec.get("samples") or [{}])[-1].get("data", {})
         timeline = loaded.get("timeline", {})
         record("replay_has_loop_data",
