@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from ..models import CommandResult, FlightEvent, Telemetry
 
@@ -411,19 +411,26 @@ class FlightDatabase:
                     ],
                 )
 
-    def get_autonomy_samples(self, flight_id: int, kind: str | None = None) -> list[dict]:
+    def get_autonomy_samples(
+        self, flight_id: int, kind: str | Iterable[str] | None = None
+    ) -> list[dict]:
+        """Raw rows, oldest first. ``kind`` may be one kind or several."""
+        kinds = [kind] if isinstance(kind, str) else (list(kind) if kind is not None else None)
         with self._lock:
-            if kind is None:
+            if kinds is None:
                 rows = self._conn.execute(
                     "SELECT timestamp, kind, data_json FROM autonomy_samples "
                     "WHERE flight_id = ? ORDER BY timestamp, id",
                     (flight_id,),
                 ).fetchall()
+            elif not kinds:
+                rows = []
             else:
+                marks = ",".join("?" for _ in kinds)
                 rows = self._conn.execute(
                     "SELECT timestamp, kind, data_json FROM autonomy_samples "
-                    "WHERE flight_id = ? AND kind = ? ORDER BY timestamp, id",
-                    (flight_id, kind),
+                    f"WHERE flight_id = ? AND kind IN ({marks}) ORDER BY timestamp, id",
+                    (flight_id, *kinds),
                 ).fetchall()
         return [
             {"timestamp": row[0], "kind": row[1], "data": json.loads(row[2])}

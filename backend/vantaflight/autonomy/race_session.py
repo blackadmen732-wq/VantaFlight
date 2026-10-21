@@ -37,6 +37,18 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..config import AUTONOMY_LOOP_HZ, AUTONOMY_MAX_SPEED_M_S
+from ..contracts import EnvelopeStamper, Quality, QualityFlag
+from ..contracts.payloads import (
+    DesiredStateV1,
+    ExecutionSampleV1,
+    PerceptionFrameV1,
+    PlannerSampleV1,
+    RaceEventV1,
+    RaceSampleV1,
+    RaceSummaryV1,
+    VehicleStateV1,
+)
+from ..core.clock import VantaClock, default_clock
 from ..frames import enu_to_ned, enu_yaw_deg_to_ned
 from ..racing.execution import AutonomousExecutionRejected, SimulationOnlyExecutionGuard
 from ..racing.planner import VantaRaceConfig
@@ -190,6 +202,8 @@ class RaceStats:
     tick_ms_total: float = 0.0
     max_tracking_error_m: float = 0.0
     gate_pass_offsets_m: list[float] = field(default_factory=list)
+    #: Records that could not be built or validated (never stops the race).
+    record_errors: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -206,21 +220,40 @@ class RaceStats:
             "max_tick_ms": round(self.max_tick_ms, 2),
             "max_tracking_error_m": round(self.max_tracking_error_m, 2),
             "gate_pass_offsets_m": [round(v, 2) for v in self.gate_pass_offsets_m],
+            "record_errors": self.record_errors,
         }
 
 
 class RaceSession:
     """Owns one race attempt at a time. Reusable across attempts."""
 
-    def __init__(self, controller, *, clock=time.monotonic, run_task: bool = True) -> None:
+    SOURCE_ID = "autonomy.race_session"
+
+    def __init__(self, controller, *, clock=None, run_task: bool = True, ids=None) -> None:
+        """``clock`` is a VantaClock or a legacy float-seconds callable.
+
+        ``ids`` (e.g. ``SequentialIds(seed)``) makes recorded envelopes
+        reproducible run to run; the default is random UUIDs.
+        """
         self._controller = controller
-        self._clock = clock
+        if clock is None or clock is time.monotonic:
+            self._vclock = default_clock()
+        elif isinstance(clock, VantaClock):
+            self._vclock = clock
+        else:
+            self._vclock = VantaClock.from_seconds(clock)
+        # Callable: returns host monotonic seconds, like the old float clocks.
+        self._clock = self._vclock
         self._run_task = run_task
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        stamper_kwargs = {"ids": ids} if ids is not None else {}
+        self._stamper = EnvelopeStamper(self.SOURCE_ID, self._vclock, **stamper_kwargs)
         self._reset()
 
     def _reset(self) -> None:
+        # Every race attempt is its own run in the recorded envelopes.
+        self._stamper.new_run()
         self.state = RaceState.IDLE
         self.course: RaceCourse | None = None
         self.config = RaceConfig()
@@ -750,37 +783,76 @@ class RaceSession:
 
     def _event(self, event_type: str, message: str) -> None:
         self._controller.log_event(event_type, message)
-        self._record_buffer.append((self._wall(), "race_event", {"event_type": event_type, "message": message}))
+        self._buffer(lambda: RaceEventV1(event_type=event_type, message=message))
 
     def _wall(self) -> float:
-        return time.time()
+        return self._vclock.wall_s()
+
+    def _quality(self, local=None) -> Quality:
+        flags = {QualityFlag.SIMULATED}
+        if self.config.perception is PerceptionMode.VISION:
+            flags.add(QualityFlag.SYNTHETIC_SENSOR)
+        if local is not None and not local.capture_known:
+            flags.add(QualityFlag.CAPTURE_TIME_IS_RECEIVE_TIME)
+        adapter = self._controller.adapter
+        provenance = (
+            f"adapter:{getattr(adapter, 'adapter_id', 'none')}",
+            f"perception:{self.config.perception.value}",
+        )
+        return Quality(
+            valid=local.valid if local is not None else True,
+            stale_after_ms=self.config.telemetry_stale_s * 1000.0,
+            provenance=provenance,
+            flags=frozenset(flags),
+        )
+
+    def _buffer(self, build_payload, *, captured_at=None, quality: Quality | None = None) -> None:
+        """Stamp a payload into an envelope and queue it for the database.
+
+        Recording must never stop the race: a payload that fails validation
+        is logged and counted instead.
+        """
+        try:
+            envelope = self._stamper.stamp(
+                build_payload(), captured_at=captured_at, quality=quality or self._quality()
+            )
+            self._record_buffer.append(
+                (self._wall(), envelope.topic, self._stamper.registry.encode(envelope))
+            )
+        except Exception:
+            self.stats.record_errors += 1
+            logger.exception("could not record race data")
 
     def _record(self, now: float, local, perception: PerceptionResult | None, desired=None) -> None:
         if now - self._last_record < 1.0 / self.config.record_hz:
             return
         self._last_record = now
-        execution = self._loop.execution.to_dict() if self._loop else None
-        self._record_buffer.append((
-            self._wall(),
-            "race_sample",
-            {
-                "race_state": self.state.value,
-                "race_time_s": round(now - self._race_started_at, 3) if self._race_started_at else 0.0,
-                "remaining_gates": list(self._remaining),
-                "state": local.to_dict() if local is not None else None,
-                "state_age_s": round(local.age_s(now), 3) if local is not None else None,
-                "vision": perception.to_dict() if perception is not None else None,
-                "planner": {
-                    "race_state": self._loop.planner.state.value if self._loop else None,
-                    "autonomy_state": self._loop.state.value if self._loop else None,
-                    "desired": desired.to_dict() if desired is not None else None,
-                },
-                "execution": execution,
-            },
-        ))
+        loop = self._loop
+
+        def build() -> RaceSampleV1:
+            return RaceSampleV1(
+                race_state=self.state.value,
+                race_time_s=round(max(0.0, now - self._race_started_at), 3) if self._race_started_at else 0.0,
+                remaining_gates=tuple(self._remaining),
+                state=VehicleStateV1.from_local_state(local) if local is not None else None,
+                state_age_s=round(local.age_s(now), 3) if local is not None else None,
+                vision=PerceptionFrameV1.from_result(perception) if perception is not None else None,
+                planner=PlannerSampleV1(
+                    race_state=loop.planner.state.value if loop else None,
+                    autonomy_state=loop.state.value if loop else None,
+                    desired=DesiredStateV1.from_desired(desired) if desired is not None else None,
+                ),
+                execution=ExecutionSampleV1.from_execution(loop.execution) if loop else None,
+            )
+
+        self._buffer(
+            build,
+            captured_at=local.captured_at if local is not None else None,
+            quality=self._quality(local),
+        )
 
     def _buffer_summary(self) -> None:
-        self._record_buffer.append((self._wall(), "race_summary", self.status()))
+        self._buffer(lambda: RaceSummaryV1.from_status(self.status()))
 
     def _flush_records(self) -> None:
         if self._record_buffer:

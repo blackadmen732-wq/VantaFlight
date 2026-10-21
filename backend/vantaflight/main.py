@@ -41,6 +41,9 @@ from .data import AsyncRecorder, FlightDatabase
 from .intelligence import IntelligenceRuntime
 from .models import AdapterType, CommandResult
 from .autonomy.courses import check_course, course_from_spec, preset_courses
+from .contracts import default_registry
+from .contracts.records import decode_record, kinds_for_topic, record_view
+from .core.clock import default_clock
 from .autonomy.race_session import RaceConfig, RaceSession
 from .digital_twin.live import LiveTwinPublisher
 from .evolution import ChampionChallengerEvaluator
@@ -774,12 +777,42 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/vantarace/recording/{flight_id}")
     async def vantarace_recording(flight_id: int, kind: str | None = None, limit: int = 2000) -> dict:
-        samples = db.get_autonomy_samples(flight_id, kind)
+        """Recorded race envelopes, decoded and migrated to current schemas.
+
+        ``kind`` is a topic (``race.sample``) or a pre-contract kind (``race_sample``).
+        """
+        rows = db.get_autonomy_samples(flight_id, kinds_for_topic(kind) if kind else None)
+        samples = []
+        errors = 0
+        for index, row in enumerate(rows):
+            try:
+                envelope = decode_record(
+                    row["kind"], row["timestamp"], row["data"],
+                    index=index, run_key=f"flight:{flight_id}",
+                )
+            except Exception:
+                errors += 1
+                continue
+            samples.append(record_view(envelope, row["timestamp"]))
         return {
             "flight_id": flight_id,
             "count": len(samples),
+            "decode_errors": errors,
             "samples": samples[-max(1, min(limit, 20000)):],
         }
+
+    # -- VantaContracts & VantaClock ----------------------------------------------
+    @app.get("/api/contracts")
+    async def contracts() -> dict:
+        registry = default_registry()
+        return {
+            "topics": registry.describe(),
+            "flight_critical": [e.topic for e in registry.flight_critical()],
+        }
+
+    @app.get("/api/clock")
+    async def clock_status() -> dict:
+        return default_clock().stats()
 
     @app.get("/api/twin/snapshot")
     async def twin_snapshot() -> dict:
