@@ -394,6 +394,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         return (await controller.connect(target)).model_dump(mode="json")
 
+    @app.get("/api/network/check")
+    async def network_status() -> dict:
+        """Can this computer reach a drone? Ports to forward on a Chromebook, in plain English."""
+        from .connection.network import network_check
+
+        return await network_check()
+
     @app.post("/api/disconnect")
     async def disconnect() -> dict:
         return (await controller.disconnect()).model_dump(mode="json")
@@ -1162,8 +1169,13 @@ def _serve_frontend(app: FastAPI, dist_dir: str) -> None:
     """
     from pathlib import Path
 
+    import mimetypes
+
     from fastapi.responses import FileResponse
 
+    # Chrome only offers "Install app" for a manifest served as a manifest.
+    mimetypes.add_type("application/manifest+json", ".webmanifest")
+    mimetypes.add_type("text/javascript", ".js")
     root = Path(dist_dir).resolve()
     index = root / "index.html"
     if not index.is_file():

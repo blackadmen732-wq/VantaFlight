@@ -91,41 +91,29 @@ The rest of VantaFlight only ever depends on the `DroneAdapter` abstraction, so
 adding PX4, ArduPilot, USB/serial, radio, UDP, or TCP later means implementing
 that one contract — nothing else changes.
 
-## Running VantaFlight locally (Linux / Chromebook Linux)
+## Get it running
 
-You need Python 3.10+ and Node.js 20.19+ or 22.12+.
-
-### 1. Install dependencies
-
-```bash
-bash scripts/install.sh
-```
-
-This creates the Python virtualenv in `backend/.venv` and installs the frontend
-packages. (It will `apt-get install python3-venv` if your system lacks it.)
-
-### 2. Start the Flight Core (terminal 1)
+**Chromebook (recommended):** [docs/CHROMEBOOK_LINUX.md](docs/CHROMEBOOK_LINUX.md).
+In short, in the Linux terminal:
 
 ```bash
-cd backend
-source .venv/bin/activate
-python -m uvicorn vantaflight.main:app --host 127.0.0.1 --port 8000
+git clone https://github.com/blackadmen732-wq/VantaFlight.git && cd VantaFlight
+scripts/install_chromebook_linux.sh     # once, needs internet (or --offline BUNDLE)
+scripts/vantaflight-chrome.sh           # every time; works with no internet
 ```
 
-### 3. Start the Desktop UI (terminal 2)
+Chrome opens `http://127.0.0.1:8000`; ⋮ → **Install VantaFlight** gives it its
+own window. Then: **Connect → Arm → Takeoff → Hold → Land**. Every run is
+recorded to `backend/vantaflight.db`.
 
-```bash
-cd frontend
-npm run dev
-```
+**Developing** (hot reload): run the backend
+(`cd backend && .venv/bin/python -m uvicorn vantaflight.main:app --port 8000`)
+and `cd frontend && npm run dev`, then open <http://127.0.0.1:5173>.
 
-### 4. Open the app
+**Check everything before a PR** (what CI runs): `scripts/check.sh`.
 
-Open <http://127.0.0.1:5173> in your browser. The Vite dev server proxies API
-and WebSocket traffic to the Flight Core automatically.
-
-Then: **Connect → Arm → Takeoff → Hold → Land**. Every run is recorded to
-`backend/vantaflight.db`.
+**Drones:** mock (built in), PX4 SITL, Hopper (camera), Tello (SDK over Wi-Fi).
+See [docs/DRONES.md](docs/DRONES.md).
 
 ### Desktop app
 

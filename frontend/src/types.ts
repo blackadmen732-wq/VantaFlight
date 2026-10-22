@@ -15,7 +15,7 @@ export type ConnectionQuality =
   | "GOOD"
   | "EXCELLENT";
 
-export type AdapterType = "mock" | "px4_sitl";
+export type AdapterType = "mock" | "px4_sitl" | "hopper" | "tello";
 
 export type SessionState =
   | "NO_SESSION"

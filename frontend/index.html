@@ -5,9 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VantaFlight</title>
     <link rel="icon" type="image/png" href="/vantaflight-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0b0f14" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Installable Chrome app (ChromeOS: menu → Install VantaFlight). Not in the
+      // Tauri window or the Vite dev server, where a cached shell would get in the way.
+      if ("serviceWorker" in navigator && !window.__TAURI__ && location.port !== "5173") {
+        window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+      }
+    </script>
   </body>
 </html>

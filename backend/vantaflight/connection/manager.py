@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from ..adapters import DroneAdapter, HopperAdapter, MockDroneAdapter, PX4SITLAdapter
+from ..adapters import DroneAdapter, HopperAdapter, MockDroneAdapter, PX4SITLAdapter, TelloAdapter, TelloConfig
 from ..adapters.hopper import HopperConfig
 from ..config import PX4_SITL_URL
 from ..mavlink import MAVLinkConfig
@@ -21,6 +21,7 @@ class TransportType(str, Enum):
     TCP = "TCP"
     HOPPER_WIFI = "HOPPER_WIFI"
     HOPPER_BLE = "HOPPER_BLE"
+    TELLO_WIFI = "TELLO_WIFI"
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,13 @@ _BUILTIN_SOURCES = [
         address="http://192.168.2.1",
         adapter_type=AdapterType.HOPPER,
     ),
+    DiscoveredDrone(
+        drone_id="tello-0",
+        name="DJI/Ryze Tello (join its TELLO-XXXXXX Wi-Fi)",
+        transport=TransportType.TELLO_WIFI,
+        address="udp://192.168.10.1:8889",
+        adapter_type=AdapterType.TELLO,
+    ),
 ]
 
 
@@ -86,6 +94,8 @@ class ConnectionManager:
             cfg = HopperConfig(adapter_id=drone.drone_id)
             cfg.camera.base_url = drone.address
             return HopperAdapter(config=cfg)
+        if drone.adapter_type == AdapterType.TELLO or drone.transport == TransportType.TELLO_WIFI:
+            return TelloAdapter(adapter_id=drone.drone_id, config=TelloConfig())
         raise NotImplementedError(f"transport {drone.transport.value} is not supported yet")
 
     def capabilities_for(self, drone: DiscoveredDrone) -> Capabilities:

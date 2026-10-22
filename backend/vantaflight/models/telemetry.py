@@ -172,3 +172,4 @@ class AdapterType(str, Enum):
     MOCK = "mock"
     PX4_SITL = "px4_sitl"
     HOPPER = "hopper"
+    TELLO = "tello"
