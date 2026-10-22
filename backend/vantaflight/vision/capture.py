@@ -14,6 +14,8 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Protocol, runtime_ch
 import cv2
 import numpy as np
 
+from ..bus.channels import ChannelSpec, DeliveryMode, LatestChannel
+from ..core.runtime import Criticality, VantaRuntime, default_runtime
 from .concepts import CameraProfile, FramePacket
 
 logger = logging.getLogger(__name__)
@@ -78,69 +80,60 @@ class FrameBufferMetrics:
 
 
 class FrameBuffer:
-    """Thread-safe bounded queue optimized for delivering the newest frame."""
+    """Newest-frame transport for vision: a VantaBus LATEST channel.
 
-    def __init__(self, capacity: int = 2, *, clock: Callable[[], float] = time.monotonic) -> None:
+    Holds at most 2 frames (a deeper camera queue would make the aircraft
+    react to history; the channel refuses it). ``latest`` hands over the
+    newest frame and counts every older one as stale. Thread-safe.
+    """
+
+    def __init__(
+        self,
+        capacity: int = 2,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        topic: str = "camera.frames",
+    ) -> None:
         if capacity <= 0:
             raise ValueError("capacity must be positive")
-        self.capacity = capacity
-        self._frames: deque[FramePacket] = deque()
-        self._lock = threading.Lock()
-        self._received = self._delivered = 0
-        self._dropped_capacity = self._dropped_stale = 0
+        self.channel = LatestChannel(
+            ChannelSpec(topic, DeliveryMode.LATEST, capacity, item_type=FramePacket,
+                        description="camera frames for vision (newest wins)"),
+            clock,
+        )
+        self._reader = self.channel.subscribe("vision", from_latest=False)
         self._clock = clock
 
+    @property
+    def capacity(self) -> int:
+        return self.channel.capacity
+
     def put(self, frame: FramePacket) -> None:
-        with self._lock:
-            self._received += 1
-            if len(self._frames) == self.capacity:
-                self._frames.popleft()
-                self._dropped_capacity += 1
-            self._frames.append(frame)
+        self.channel.publish(frame)
 
     def latest(self, max_age_s: float | None = None, now: float | None = None) -> FramePacket | None:
         """Return newest frame, discarding older queued and over-age frames."""
         if max_age_s is not None and max_age_s < 0:
             raise ValueError("max_age_s must be non-negative")
-        with self._lock:
-            if not self._frames:
-                return None
-            newest = self._frames.pop()
-            self._dropped_stale += len(self._frames)
-            self._frames.clear()
-            if max_age_s is not None:
-                age = (self._clock() if now is None else now) - newest.capture_timestamp
-                if age > max_age_s:
-                    self._dropped_stale += 1
-                    return None
-            self._delivered += 1
-            return newest
+        return self._reader.take(max_age_s, now)
 
     def clear(self) -> None:
-        with self._lock:
-            self._dropped_stale += len(self._frames)
-            self._frames.clear()
+        self._reader.clear()
 
     @property
     def metrics(self) -> FrameBufferMetrics:
-        with self._lock:
-            now = self._clock()
-            oldest_age = (
-                max(0.0, now - self._frames[0].capture_timestamp) if self._frames else None
-            )
-            current_age = (
-                max(0.0, now - self._frames[-1].capture_timestamp) if self._frames else None
-            )
-            return FrameBufferMetrics(
-                self._received,
-                self._delivered,
-                self._dropped_capacity,
-                self._dropped_stale,
-                len(self._frames),
-                self.capacity,
-                oldest_age,
-                current_age,
-            )
+        reader = self._reader
+        oldest, newest = reader.unread_ages(self._clock())
+        return FrameBufferMetrics(
+            self.channel.published,
+            reader.delivered,
+            reader.dropped_superseded,
+            reader.dropped_stale,
+            reader.depth,
+            self.capacity,
+            oldest,
+            newest,
+        )
 
 
 @dataclass(frozen=True)
@@ -153,46 +146,38 @@ class PreviewBufferMetrics:
 
 
 class PreviewBuffer:
-    """Best-effort bounded preview queue that never waits on its consumer."""
+    """Best-effort bounded preview queue that never waits on its consumer.
 
-    def __init__(self, capacity: int = 1) -> None:
+    A LATEST channel published with ``try_publish``: if a reader holds the
+    lock, the preview frame is dropped (and counted) instead of waiting.
+    """
+
+    def __init__(self, capacity: int = 1, *, topic: str = "camera.preview") -> None:
         if capacity <= 0:
             raise ValueError("capacity must be positive")
-        self.capacity = capacity
-        self._frames: deque[FramePacket] = deque()
-        self._lock = threading.Lock()
-        self._received = self._dropped = self._delivered = 0
+        self.channel = LatestChannel(
+            ChannelSpec(topic, DeliveryMode.LATEST, capacity, item_type=FramePacket,
+                        description="camera frames for the operator preview (best effort)"),
+        )
+        self._reader = self.channel.subscribe("preview", from_latest=False)
+
+    @property
+    def capacity(self) -> int:
+        return self.channel.capacity
 
     def put_nowait(self, frame: FramePacket) -> bool:
-        if not self._lock.acquire(blocking=False):
-            self._dropped += 1
-            return False
-        try:
-            self._received += 1
-            if len(self._frames) == self.capacity:
-                self._frames.popleft()
-                self._dropped += 1
-            self._frames.append(frame)
-            return True
-        finally:
-            self._lock.release()
+        return self.channel.try_publish(frame)
 
     def latest(self) -> FramePacket | None:
-        with self._lock:
-            if not self._frames:
-                return None
-            frame = self._frames.pop()
-            self._dropped += len(self._frames)
-            self._frames.clear()
-            self._delivered += 1
-            return frame
+        return self._reader.take(None)
 
     @property
     def metrics(self) -> PreviewBufferMetrics:
-        with self._lock:
-            return PreviewBufferMetrics(
-                self._received, self._dropped, self._delivered, len(self._frames), self.capacity
-            )
+        reader = self._reader
+        dropped = self.channel.contended + reader.dropped_superseded + reader.dropped_stale
+        return PreviewBufferMetrics(
+            self.channel.published, dropped, reader.delivered, reader.depth, self.capacity
+        )
 
 
 class SyntheticCameraSource(BaseCameraSource):
@@ -510,10 +495,21 @@ class CameraManager:
         frame_buffer: FrameBuffer | None = None,
         preview_buffer: PreviewBuffer | None = None,
         idle_sleep_s: float = 0.001,
+        runtime: VantaRuntime | None = None,
+        bus=None,
     ) -> None:
+        """``bus`` (optional) gets the frame and preview channels, so their
+        rate, age, depth and drops show up in bus status and health."""
         self.source = source
-        self.frame_buffer = frame_buffer or FrameBuffer()
-        self.preview_buffer = preview_buffer or PreviewBuffer()
+        topic_id = _topic_safe(getattr(source, "source_id", "camera"))
+        self.frame_buffer = frame_buffer or FrameBuffer(topic=f"camera.frames.{topic_id}")
+        self.preview_buffer = preview_buffer or PreviewBuffer(topic=f"camera.preview.{topic_id}")
+        self._runtime = runtime
+        self._capture_worker = None
+        self._processing_worker = None
+        if bus is not None:
+            bus.attach(self.frame_buffer.channel)
+            bus.attach(self.preview_buffer.channel)
         self.idle_sleep_s = idle_sleep_s
         self._capture_task: asyncio.Task[None] | None = None
         self._processing_task: asyncio.Task[None] | None = None
@@ -562,9 +558,12 @@ class CameraManager:
             self._source_started = True
             self._failure = None
             self._running = True
-            self._capture_task = asyncio.create_task(
-                self._capture_loop(), name=f"vision-capture:{self.source.source_id}"
+            self._capture_worker = (self._runtime or default_runtime()).spawn(
+                f"vision.capture:{_topic_safe(self.source.source_id)}", self._capture_loop,
+                owner="vision.camera_manager", criticality=Criticality.CRITICAL,
+                description="Reads the camera into the LATEST frame channel", singleton=False,
             )
+            self._capture_task = self._capture_worker.task
 
     async def _capture_loop(self) -> None:
         try:
@@ -621,7 +620,11 @@ class CameraManager:
                     logger.exception("vision processing loop failed")
                     self._running = False
 
-        self._processing_task = asyncio.create_task(loop(), name="vision-process-latest")
+        self._processing_worker = (self._runtime or default_runtime()).spawn(
+            "vision.process", loop, owner="vision.camera_manager", criticality=Criticality.CRITICAL,
+            description="Runs vision on the newest frame", singleton=False,
+        )
+        self._processing_task = self._processing_worker.task
         return self._processing_task
 
     async def stop(self) -> None:
@@ -648,3 +651,9 @@ class CameraManager:
     async def restart(self) -> None:
         await self.stop()
         await self.start()
+
+
+def _topic_safe(name: str) -> str:
+    """A source id as a bus topic segment (lowercase, [a-z0-9_])."""
+    safe = "".join(ch if ch.isalnum() else "_" for ch in str(name).lower()).strip("_")
+    return safe or "camera"

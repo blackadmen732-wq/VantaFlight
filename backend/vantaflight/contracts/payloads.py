@@ -194,6 +194,80 @@ class FailsafeTriggerV1(ContractPayload):
         return cls(reason=str(trigger.reason), action=_enum_value(trigger.action), message=str(trigger.message))
 
 
+# -- flight log, authority, health -----------------------------------------------------------
+class FlightEventV1(ContractPayload):
+    """One entry of the flight log (connection, commands, failsafes, mission and race transitions).
+
+    The envelope's ``captured_at`` is the event's UTC wall time (a record), its
+    ``received_at`` / ``published_at`` the host monotonic times.
+    """
+
+    TOPIC = "flight.event"
+    SCHEMA_VERSION = 1
+
+    event_type: str = Field(min_length=1, max_length=64)
+    message: str
+
+    @classmethod
+    def from_event(cls, event: Any) -> "FlightEventV1":
+        return cls(event_type=str(event.event_type), message=str(event.message))
+
+
+AuthorityLevelName = Literal[
+    "TRAINING_OBSERVATION", "AGENT_PROPOSAL", "APPROVED_MISSION_AUTOMATION",
+    "OPERATOR", "EMERGENCY_OPERATOR", "FAILSAFE",
+]
+
+
+class AuthorityDecisionV1(ContractPayload):
+    """A VantaAuthority grant, denial, revocation, release, expiry or preemption."""
+
+    TOPIC = "authority.decision"
+    SCHEMA_VERSION = 1
+
+    action: Literal["grant", "deny", "release", "revoke", "preempt", "expire"]
+    granted: bool
+    owner: str
+    level: AuthorityLevelName
+    scope: tuple[str, ...]
+    vehicle_id: str
+    reason: str
+    lease_id: str | None = None
+    approved_by: str | None = None
+    expires_in_s: float | None = Field(default=None, gt=0.0)
+
+    @classmethod
+    def from_decision(cls, d: Any) -> "AuthorityDecisionV1":
+        return cls(
+            action=d.action, granted=bool(d.granted), owner=str(d.owner), level=d.level.name,
+            scope=tuple(d.scope), vehicle_id=str(d.vehicle_id), reason=str(d.reason),
+            lease_id=d.lease_id, approved_by=d.approved_by, expires_in_s=d.expires_in_s,
+        )
+
+
+HealthStateName = Literal["UNKNOWN", "STARTING", "HEALTHY", "DEGRADED", "FAILED", "RECOVERING", "STOPPED"]
+
+
+class HealthChangeV1(ContractPayload):
+    """A component's overall VantaHealth state changed."""
+
+    TOPIC = "system.health"
+    SCHEMA_VERSION = 1
+
+    component: str
+    kind: str
+    previous: HealthStateName
+    state: HealthStateName
+    detail: str = ""
+
+    @classmethod
+    def from_change(cls, change: Any) -> "HealthChangeV1":
+        return cls(
+            component=change.component, kind=change.kind, previous=_enum_value(change.previous),
+            state=_enum_value(change.state), detail=change.detail,
+        )
+
+
 # -- perception ------------------------------------------------------------------------------
 class GateObservationV1(ContractPayload):
     """One gate seen by VantaSight, world ENU."""
@@ -547,6 +621,11 @@ def register_all(registry) -> None:
                       description="A vehicle command and its transport outcome.")
     registry.register(FailsafeTriggerV1, flight_critical=True,
                       description="An automatic failsafe decision.")
+    registry.register(FlightEventV1, flight_critical=True,
+                      description="Flight log entry: connection, commands, failsafes, mission and race transitions.")
+    registry.register(AuthorityDecisionV1, flight_critical=True,
+                      description="VantaAuthority grant/deny/revoke/release/expire/preempt decision.")
+    registry.register(HealthChangeV1, description="A component's VantaHealth state changed.")
     registry.register(GateObservationV1, frame_id=FrameId.WORLD_ENU, flight_critical=True,
                       description="A gate observed by VantaSight.")
     registry.register(PerceptionFrameV1, flight_critical=True,

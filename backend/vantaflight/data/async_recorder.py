@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from ..core.runtime import Criticality, VantaRuntime, default_runtime
 from .database import FlightDatabase
 
 
@@ -44,9 +46,13 @@ class AsyncRecorder:
         capacity: int = 512,
         batch_size: int = 32,
         flush_interval_s: float = 0.1,
+        runtime: VantaRuntime | None = None,
     ) -> None:
         if capacity < 1 or batch_size < 1 or flush_interval_s <= 0:
             raise ValueError("recorder limits must be positive")
+        self._runtime = runtime
+        self._capacity = capacity
+        self._last_drop_s: float | None = None
         self._database = database
         self._queue: asyncio.Queue[dict[str, Any] | object] = asyncio.Queue(capacity)
         self._batch_size = batch_size
@@ -67,16 +73,23 @@ class AsyncRecorder:
             raise RuntimeError("failed recorder cannot be restarted")
         self._accepting = True
         self._state = RecorderState.RUNNING
-        self._task = asyncio.create_task(self._run(), name="vantaflight-recorder")
+        worker = (self._runtime or default_runtime()).spawn(
+            "recorder.writer", self._run, owner="data.recorder", criticality=Criticality.NORMAL,
+            description="Batches intelligence records into SQLite off the control path",
+            singleton=False,
+        )
+        self._task = worker.task
 
     def record(self, kind: str, payload: dict[str, Any]) -> bool:
         if not self._accepting:
             self._dropped += 1
+            self._last_drop_s = time.monotonic()
             return False
         try:
             self._queue.put_nowait({"kind": kind, "payload": payload})
         except asyncio.QueueFull:
             self._dropped += 1
+            self._last_drop_s = time.monotonic()
             return False
         self._accepted += 1
         return True
@@ -94,6 +107,29 @@ class AsyncRecorder:
         self._task = None
         if self._state is not RecorderState.FAILED:
             self._state = RecorderState.STOPPED
+
+    def health(self, now_s: float | None = None):
+        """VantaHealth probe: is the writer alive, and is the queue keeping up?"""
+        from ..core.health import ComponentHealth, DimensionStatus, HealthDimension, HealthState
+
+        m = self.metrics
+        liveness = {
+            RecorderState.RUNNING: HealthState.HEALTHY,
+            RecorderState.STOPPING: HealthState.STOPPED,
+            RecorderState.STOPPED: HealthState.STOPPED,
+            RecorderState.FAILED: HealthState.FAILED,
+        }[m.state]
+        depth = m.queue_depth
+        dropped_recently = self._last_drop_s is not None and time.monotonic() - self._last_drop_s < 10.0
+        resource = (
+            HealthState.DEGRADED if depth >= 0.8 * self._capacity or dropped_recently else HealthState.HEALTHY
+        )
+        yield ComponentHealth("recorder", "service", {
+            HealthDimension.LIVENESS: DimensionStatus(liveness, m.last_error or m.state.value),
+            HealthDimension.RESOURCE: DimensionStatus(
+                resource, f"queue {depth}/{self._capacity}, dropped {m.dropped_records}", depth
+            ),
+        })
 
     @property
     def metrics(self) -> RecorderMetrics:

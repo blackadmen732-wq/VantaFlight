@@ -207,11 +207,14 @@ of failing the whole recording. Replay does the same per frame.
 | `safety.failsafe` | `FailsafeTriggerV1` | 1 | | yes | |
 | `vision.gate_observation` | `GateObservationV1` | 1 | WORLD_ENU | yes | |
 | `vision.perception` | `PerceptionFrameV1` | 1 | | yes | |
+| `flight.event` | `FlightEventV1` | 1 | | yes | |
+| `authority.decision` | `AuthorityDecisionV1` | 1 | | yes | |
+| `system.health` | `HealthChangeV1` | 1 | | | |
 | `race.sample` | `RaceSampleV1` | 1 | | | v0 (PR #8 rows) |
 | `race.event` | `RaceEventV1` | 1 | | | v0 |
 | `race.summary` | `RaceSummaryV1` | 1 | | | v0 |
 
-What is live in this PR: `RaceSession` stamps and records `race.sample`,
+Since PR B, `flight.event`, `execution.command`, `safety.failsafe` and `authority.decision` are published on VantaBus reliable channels (see [RUNTIME.md](RUNTIME.md)). What PR A made live: `RaceSession` stamps and records `race.sample`,
 `race.event` and `race.summary` envelopes. Each sample nests the vehicle
 state, perception, planner and execution payloads above. The telemetry,
 command and failsafe contracts are defined, with `from_*` converters from

@@ -13,6 +13,7 @@ from typing import AsyncIterator, Callable, Optional, TypeVar
 
 from .config import MAVLinkConfig
 from ..core.clock import ClockDomain, TimeStamp, VantaClock, default_clock
+from ..core.runtime import Criticality, VantaRuntime, default_runtime, gather_children
 
 logger = logging.getLogger(__name__)
 
@@ -107,13 +108,20 @@ class PX4Telemetry:
 class MAVSDKClient:
     """Mockable MAVSDK boundary for PX4 SITL control."""
 
-    def __init__(self, config: MAVLinkConfig | None = None, clock: VantaClock | None = None) -> None:
+    def __init__(
+        self,
+        config: MAVLinkConfig | None = None,
+        clock: VantaClock | None = None,
+        runtime: VantaRuntime | None = None,
+    ) -> None:
         self._config = config or MAVLinkConfig()
         self._clock = clock or default_clock()
+        self._runtime = runtime
         self._system = None
         self._connected = False
         self._telemetry = PX4Telemetry()
         self._telemetry_task: asyncio.Task | None = None
+        self._telemetry_worker = None
 
     @property
     def connected(self) -> bool:
@@ -173,7 +181,13 @@ class MAVSDKClient:
         self._telemetry.connected = True
         self._telemetry.health_all_ok = health_ok
         self._telemetry.touch()
-        self._telemetry_task = asyncio.create_task(self._stream_telemetry())
+        self._telemetry_worker = (self._runtime or default_runtime()).spawn(
+            f"px4.telemetry:{self._config.system_address}", self._stream_telemetry,
+            owner="vehicle.px4", criticality=Criticality.SAFETY,
+            description="MAVSDK telemetry streams (position, attitude, battery, mode, ...)",
+            singleton=False,
+        )
+        self._telemetry_task = self._telemetry_worker.task
 
     async def disconnect(self) -> None:
         if self._telemetry_task is not None:
@@ -324,16 +338,8 @@ class MAVSDKClient:
                 logger.error("%s stream lost: %s", name, e)
                 self._connected = False
 
-        tasks = [
-            asyncio.create_task(_pump(name, open_stream, apply))
-            for name, (open_stream, apply) in streams.items()
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        except asyncio.CancelledError:
-            for t in tasks:
-                t.cancel()
-            raise
+        # Structured children of this worker: they live and die with it.
+        await gather_children(*(_pump(name, open_stream, apply) for name, (open_stream, apply) in streams.items()))
 
     @property
     def vehicle_clock_id(self) -> str:

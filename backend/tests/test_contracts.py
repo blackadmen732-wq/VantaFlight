@@ -40,12 +40,15 @@ from vantaflight.contracts.frames import (
     yaw_ned_rad_to_enu,
 )
 from vantaflight.contracts.payloads import (
+    AuthorityDecisionV1,
     CommandRecordV1,
     DesiredStateV1,
     ExecutionSampleV1,
     FailsafeTriggerV1,
+    FlightEventV1,
     GateObservationV1,
     GateTargetV1,
+    HealthChangeV1,
     OffboardSetpointV1,
     PerceptionFrameV1,
     PlannerSampleV1,
@@ -124,6 +127,16 @@ def sample_payloads() -> dict[str, ContractPayload]:
             ),
         ),
         "race.event": RaceEventV1(event_type="race_started", message="go"),
+        "flight.event": FlightEventV1(event_type="failsafe", message="battery low, returning home"),
+        "authority.decision": AuthorityDecisionV1(
+            action="grant", granted=True, owner="race:1", level="APPROVED_MISSION_AUTOMATION",
+            scope=("trajectory",), vehicle_id="mock-01", reason="granted trajectory",
+            lease_id="l-1", approved_by="operator", expires_in_s=1.0,
+        ),
+        "system.health": HealthChangeV1(
+            component="bus:flight.telemetry", kind="bus.channel", previous="HEALTHY", state="DEGRADED",
+            detail="last publish 400 ms ago",
+        ),
         "race.summary": RaceSummaryV1(
             state="COMPLETE", gates_passed=3, total_gates=3, race_time_s=20.0, elapsed_s=30.0
         ),
@@ -190,6 +203,7 @@ def test_every_flight_critical_contract_is_typed_versioned_and_framed():
     assert critical == {
         "vehicle.state", "vehicle.telemetry", "planner.desired", "execution.setpoint",
         "execution.command", "safety.failsafe", "vision.gate_observation", "vision.perception",
+        "flight.event", "authority.decision",
     }
     samples = sample_payloads()
     for topic in critical:

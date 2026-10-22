@@ -259,13 +259,17 @@ async def test_a_race_ended_outside_the_loop_records_its_final_event_and_summary
         h.adapter.inject_fault("battery", 20.0)
         await h.fly_until(lambda: not h.session.active, timeout=2.0)
     assert h.state() == RaceState.ABORTED
-    rows = h.db.get_autonomy_samples(h.controller.flight_id)
+
+    def race_rows():
+        return [r for r in h.db.get_autonomy_samples(h.controller.flight_id) if r["kind"].startswith("race.")]
+
+    rows = race_rows()
     assert rows[-1]["kind"] == "race.summary", [r["kind"] for r in rows[-3:]]
     assert rows[-1]["data"]["payload"]["state"] == "ABORTED"
     events = [r["data"]["payload"]["event_type"] for r in rows if r["kind"] == "race.event"]
     assert events[-1] == "race_aborted"
     await h.fly(1.0)  # nothing is written twice once the race is over
-    assert len(h.db.get_autonomy_samples(h.controller.flight_id)) == len(rows)
+    assert len(race_rows()) == len(rows)
 
 
 # -- perception faults --------------------------------------------------------------
@@ -412,13 +416,18 @@ async def test_flight_core_refuses_unsafe_setpoints():
             now if timestamp is None else timestamp, "t", 1.0,
         )
 
-    assert (await h.controller.offboard_setpoint(setpoint((0, 5, -5)), now=now)).accepted
-    outside = await h.controller.offboard_setpoint(setpoint((0, 400, -5)), now=now)
+    lease = h.session.lease
+    assert (await h.controller.offboard_setpoint(setpoint((0, 5, -5)), now=now, lease=lease)).accepted
+    outside = await h.controller.offboard_setpoint(setpoint((0, 400, -5)), now=now, lease=lease)
     assert not outside.accepted and "geofence" in outside.message
-    fast = await h.controller.offboard_setpoint(setpoint((0, 5, -5), (0, 20, 0)), now=now)
+    fast = await h.controller.offboard_setpoint(setpoint((0, 5, -5), (0, 20, 0)), now=now, lease=lease)
     assert not fast.accepted and "speed" in fast.message
-    late = await h.controller.offboard_setpoint(setpoint((0, 5, -5), timestamp=now - 1.0), now=now)
+    late = await h.controller.offboard_setpoint(setpoint((0, 5, -5), timestamp=now - 1.0), now=now, lease=lease)
     assert not late.accepted and "expired" in late.message
+    # No lease, or a lease the operator has since preempted: refused before anything else.
+    bare = await h.controller.offboard_setpoint(setpoint((0, 5, -5)), now=now)
+    assert not bare.accepted and "authority" in bare.message
+    assert h.controller.offboard_stats["unauthorized"] == 1
 
 
 # -- building blocks --------------------------------------------------------------------
