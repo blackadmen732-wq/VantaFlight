@@ -43,7 +43,10 @@ from .models import AdapterType, CommandResult
 from .autonomy.courses import check_course, course_from_spec, preset_courses
 from .contracts import default_registry
 from .contracts.records import decode_record, kinds_for_topic, record_view
-from .core.clock import default_clock
+from .bus.topics import FLIGHT_EVENT, FLIGHT_TELEMETRY
+from .core.flight_controller import event_from_envelope
+from .core.runtime import Criticality, RestartPolicy
+from .core.system import VantaSystem
 from .autonomy.race_session import RaceConfig, RaceSession
 from .digital_twin.live import LiveTwinPublisher
 from .evolution import ChampionChallengerEvaluator
@@ -204,19 +207,34 @@ class ConnectionHub:
 def create_app(db_path: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        runtime = system.runtime
+        await system.start()
         await recorder.start()
-        app.state.stream_task = asyncio.create_task(stream_loop())
+        # The flight tick (failsafes, missions, telemetry) and the UI stream
+        # are separate workers: a slow browser can no longer delay a failsafe.
+        runtime.spawn_periodic(
+            "flight.tick", controller.tick, period_s=1.0 / STREAM_HZ, owner="core.flight_controller",
+            criticality=Criticality.SAFETY, restart=RestartPolicy.limited(3),
+            description="Telemetry sampling, failsafes and mission stepping",
+        )
+        runtime.spawn_periodic(
+            "ui.stream", stream_once, period_s=1.0 / STREAM_HZ, owner="ui.hub",
+            criticality=Criticality.BEST_EFFORT,
+            description="Pushes telemetry, events and state to WebSocket clients",
+        )
+        system.activate()
         try:
             yield
         finally:
-            task = getattr(app.state, "stream_task", None)
-            if task is not None:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+            # Execution first, then the vehicle link, then recording.
+            runtime.begin_shutdown()
+            await race_session.shutdown("backend shutting down")
+            await runtime.stop_worker("ui.stream")
+            await runtime.stop_worker("flight.tick")
             with contextlib.suppress(Exception):
-                await race_session.abort("backend shutting down")
+                await controller.shutdown("backend shutting down")
             await recorder.stop()
+            await system.stop()
             db.close()
 
     app = FastAPI(
@@ -231,10 +249,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
         allow_headers=["Content-Type"],
     )
 
+    system = VantaSystem.create(telemetry_rate_hz=STREAM_HZ)
     db = FlightDatabase(db_path or DB_PATH)
-    recorder = AsyncRecorder(db)
+    recorder = AsyncRecorder(db, runtime=system.runtime)
     connection_manager = ConnectionManager()
-    controller = FlightController(db, connection_manager=connection_manager)
+    controller = FlightController(
+        db, connection_manager=connection_manager,
+        bus=system.bus, authority=system.authority, clock=system.clock,
+    )
+    system.health.register_probe("vehicle", controller.health)
+    system.health.register_probe("recorder", recorder.health)
+    ui_telemetry = system.bus.subscribe(FLIGHT_TELEMETRY, "ui.stream")
+    ui_events = system.bus.subscribe(FLIGHT_EVENT, "ui.stream")
     hub = ConnectionHub()
     intelligence = IntelligenceRuntime()
     supervisor = RuntimeSupervisor()
@@ -275,7 +301,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     replay_player = ReplayPlayer()
     hw_mode_manager = HardwareModeManager()
     preflight_checker = PreflightChecker()
-    race_session = RaceSession(controller)
+    race_session = RaceSession(controller, runtime=system.runtime, clock=system.clock)
     controller.attach_autonomy(race_session)
     app.state.race_session = race_session
 
@@ -300,6 +326,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             db.update_mission_status(_row["mission_id"], "ABORTED", phase="ABORT")
     _twin_snapshot: dict = {"ref": TwinWorldSnapshot(timestamp=0.0, sequence=0)}
     app.state.db = db
+    app.state.system = system
     app.state.supervisor = supervisor
     app.state.perf_manager = perf_manager
     app.state.controller = controller
@@ -308,11 +335,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.intelligence = intelligence
     app.state.training_engine = training_engine
 
+    _ui: dict = {"telemetry": None}
+
     async def stream_once() -> None:
-        telemetry = await controller.tick()
-        await hub.broadcast({"type": "telemetry", "data": telemetry.model_dump(mode="json")})
-        for event in controller.drain_events():
-            await hub.broadcast({"type": "event", "data": event.model_dump(mode="json")})
+        # Read what the flight tick produced; never sample the vehicle here.
+        fresh = ui_telemetry.take(None)
+        if fresh is not None:
+            _ui["telemetry"] = fresh
+            await hub.broadcast({"type": "telemetry", "data": fresh.model_dump(mode="json")})
+        telemetry = _ui["telemetry"]
+        for envelope in ui_events.drain(256):
+            await hub.broadcast({"type": "event", "data": event_from_envelope(envelope).model_dump(mode="json")})
+        if telemetry is None:
+            return  # nothing sampled yet
         if controller.twin.active:
             await hub.broadcast({"type": "twin", "data": controller.twin.state.to_dict()})
         if controller.mission.state != MissionState.IDLE:
@@ -335,21 +370,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
         snapshot = twin_builder.build()
         _twin_snapshot["ref"] = snapshot
         await hub.broadcast({"type": "twin_snapshot", "data": snapshot.to_dict()})
-
-    async def stream_loop() -> None:
-        period = 1.0 / STREAM_HZ
-        while True:
-            t_start = time.monotonic()
-            try:
-                await stream_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # Never let one bad sample kill telemetry, failsafes and
-                # missions for the rest of the session.
-                logger.exception("telemetry tick failed; continuing")
-            elapsed = time.monotonic() - t_start
-            await asyncio.sleep(max(0, period - elapsed))
 
     # -- REST ---------------------------------------------------------------
     @app.get("/api/health")
@@ -700,7 +720,36 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # -- V0.9 runtime/performance/autonomy -----------------------------------
     @app.get("/api/runtime/status")
     async def runtime_status() -> dict:
-        return supervisor.to_dict()
+        """Every registered worker (the Performance page's "services" table) plus
+        the runtime lifecycle and any task nobody registered."""
+        status = system.runtime.status()
+        legacy = supervisor.to_dict()
+        services = {
+            w["name"]: {
+                "name": w["name"], "state": w["state"],
+                "uptime_s": w["uptime_s"] or 0.0, "error": w["last_error"],
+            }
+            for w in status["workers"]
+        }
+        return {
+            "overall": status["lifecycle"],
+            "deployment_mode": legacy["deployment_mode"],
+            "node": legacy["node"],
+            "services": services,
+            **status,
+        }
+
+    @app.get("/api/health/components")
+    async def health_components() -> dict:
+        return system.health.to_dict()
+
+    @app.get("/api/bus")
+    async def bus_status() -> dict:
+        return system.bus.status()
+
+    @app.get("/api/authority")
+    async def authority_status() -> dict:
+        return system.authority.status()
 
     @app.get("/api/runtime/performance")
     async def runtime_performance() -> dict:
@@ -804,7 +853,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # -- VantaContracts & VantaClock ----------------------------------------------
     @app.get("/api/contracts")
     async def contracts() -> dict:
-        registry = default_registry()
+        registry = system.contracts
         return {
             "topics": registry.describe(),
             "flight_critical": [e.topic for e in registry.flight_critical()],
@@ -812,7 +861,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/clock")
     async def clock_status() -> dict:
-        return default_clock().stats()
+        return system.clock.stats()
 
     @app.get("/api/twin/snapshot")
     async def twin_snapshot() -> dict:
@@ -1163,6 +1212,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # -- WebSocket ----------------------------------------------------------
     @app.websocket("/ws/telemetry")
     async def telemetry_ws(ws: WebSocket) -> None:
+        # The session is the server's task; registering it keeps it visible
+        # in runtime status and lets shutdown account for it.
+        async with system.runtime.track("ui.ws_client", owner="ui.hub"):
+            await _telemetry_session(ws)
+
+    async def _telemetry_session(ws: WebSocket) -> None:
         await hub.register(ws)
         try:
             # Bring a (re)connecting client up to date in one go.

@@ -21,6 +21,7 @@ Each claim is reported at the level it was actually reached (see
 | Routing engine and no-fly zones | INTEGRATION_TESTED |
 | Replay of a recorded flight | SITL_VERIFIED |
 | VantaRace / vision autonomy loop | INTEGRATION_TESTED: launchable from the Race page; full loop (VantaSight → VantaState → VantaRace → VantaExecution → offboard) flown closed-loop on the mock, all fault cases ([VANTARACE_SITL.md](VANTARACE_SITL.md)). PX4 SITL harness and CI job written; **not yet SITL_VERIFIED** (Actions not running) |
+| Bus, runtime, health, authority ([RUNTIME.md](RUNTIME.md)) | UNIT_TESTED, INTEGRATION_TESTED on the mock; not SITL_VERIFIED |
 | Time and contracts (VantaClock, typed versioned envelopes, legacy migration) | UNIT_TESTED, INTEGRATION_TESTED on the mock ([CONTRACTS.md](CONTRACTS.md)); not SITL_VERIFIED |
 | Training campaigns, weakness map, champion/challenger | INTEGRATION_TESTED |
 | Hopper camera-only mode | INTEGRATION_TESTED; needs REAL_CAMERA / HOPPER_OBSERVE on hardware |
@@ -53,6 +54,22 @@ with Gazebo (15/15 stages; see [PX4.md](PX4.md#end-to-end-verification)).
 - Correction: the earlier FAST_SIM_VERIFIED label for this loop overstated
   it — the fast-sim runner never ran VantaRace (it flew straight at gates)
   and `AutonomyLoop` had no tests.
+
+### Engineering spec, PR B: bus, runtime, health, authority (stacked on PR A)
+
+- [x] VantaSystem composition root; VantaBus with LATEST / BOUNDED_STREAM /
+      RELIABLE_EVENT channels and per-topic rate, age, depth, drops and lag
+- [x] Camera frames on bounded LATEST channels (a queue deeper than 2 is refused)
+- [x] Flight log, commands, failsafes and authority decisions on reliable
+      channels persisted by the flight database; a full backlog is refused loudly
+- [x] VantaRuntime: every long-running task registered (enforced by a source
+      test), deadlines and restart policies, ordered shutdown to zero workers
+- [x] Flight tick separated from the UI stream (a slow browser no longer delays failsafes)
+- [x] VantaHealth: per-dimension health for bus, workers, vehicle link,
+      battery/position availability, recorder (`/api/health/components`)
+- [x] VantaAuthority: leases on every offboard setpoint; operator and failsafe
+      preempt automation; agents never get physical execution authority
+- Tested: 778 backend tests pass on the local stand-in runner (54 new). Not SITL_VERIFIED.
 
 ### Engineering spec, PR A: time and contracts (stacked on the VantaRace branch)
 

@@ -48,7 +48,9 @@ from ..contracts.payloads import (
     RaceSummaryV1,
     VehicleStateV1,
 )
+from ..core.authority import AuthorityDenied, AuthorityLevel, LeaseInvalid
 from ..core.clock import VantaClock, default_clock
+from ..core.runtime import Criticality, VantaRuntime, default_runtime
 from ..frames import enu_to_ned, enu_yaw_deg_to_ned
 from ..racing.execution import AutonomousExecutionRejected, SimulationOnlyExecutionGuard
 from ..racing.planner import VantaRaceConfig
@@ -63,6 +65,10 @@ from .perception import GatePerception, PerceptionMode, PerceptionResult, Percep
 logger = logging.getLogger(__name__)
 
 SOURCE = "autonomy"
+#: The race renews its authority lease every tick; if the loop stalls this
+#: long the lease lapses and the flight core refuses its setpoints.
+LEASE_TTL_S = 2.0
+LEASE_SCOPE = frozenset({"trajectory", "offboard"})
 
 
 class RaceState(str, enum.Enum):
@@ -229,7 +235,9 @@ class RaceSession:
 
     SOURCE_ID = "autonomy.race_session"
 
-    def __init__(self, controller, *, clock=None, run_task: bool = True, ids=None) -> None:
+    def __init__(
+        self, controller, *, clock=None, run_task: bool = True, ids=None, runtime: VantaRuntime | None = None
+    ) -> None:
         """``clock`` is a VantaClock or a legacy float-seconds callable.
 
         ``ids`` (e.g. ``SequentialIds(seed)``) makes recorded envelopes
@@ -245,6 +253,8 @@ class RaceSession:
         # Callable: returns host monotonic seconds, like the old float clocks.
         self._clock = self._vclock
         self._run_task = run_task
+        self._runtime = runtime
+        self._worker = None  # the race.loop runtime worker
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         stamper_kwargs = {"ids": ids} if ids is not None else {}
@@ -284,6 +294,7 @@ class RaceSession:
         self._expiry_logged = False
         self._passes: list[dict] = []
         self.stats = RaceStats()
+        self._lease = None
 
     # -- queries --------------------------------------------------------------
     @property
@@ -293,6 +304,11 @@ class RaceSession:
     @property
     def loop(self) -> AutonomyLoop | None:
         return self._loop
+
+    @property
+    def lease(self):
+        """The authority lease the race holds while active (None otherwise)."""
+        return self._lease
 
     # -- operator actions -----------------------------------------------------
     async def start(self, course: RaceCourse, config: RaceConfig | None = None) -> dict:
@@ -327,8 +343,24 @@ class RaceSession:
                 return self._result(
                     False, f"battery {telemetry.battery_percentage:.0f}% is too low to start a race"
                 )
+            vehicle_id = controller.vehicle_id
+            if vehicle_id is None:
+                return self._result(False, "aircraft is not connected")
+            # The operator starting the race approves this automation; it
+            # still ranks below the operator and every failsafe.
+            try:
+                lease = controller.authority.acquire(
+                    f"vantarace:{course.course_id}", AuthorityLevel.APPROVED_MISSION_AUTOMATION,
+                    LEASE_SCOPE, vehicle_id, ttl_s=LEASE_TTL_S, approved_by="operator",
+                )
+            except AuthorityDenied as exc:
+                return self._result(False, f"authority refused: {exc.reason}")
 
+            runtime = self._runtime or default_runtime()
+            if self._worker is not None and self._worker.alive:
+                await runtime.stop_worker(self._worker.name)  # a previous attempt's loop
             self._reset()
+            self._lease = lease
             self.course = course
             self.config = config
             self._permit = permit
@@ -361,7 +393,11 @@ class RaceSession:
                 if not res.accepted:
                     return self._fail_start(f"takeoff rejected: {res.message}")
             if self._run_task:
-                self._task = asyncio.create_task(self._run())
+                self._worker = runtime.spawn(
+                    "race.loop", self._run, owner=self.SOURCE_ID, criticality=Criticality.CRITICAL,
+                    description=f"VantaRace closed loop at {config.loop_hz:g} Hz",
+                )
+                self._task = self._worker.task
             return self._result(True, f"race started on '{course.name}'")
 
     async def pause(self) -> dict:
@@ -395,6 +431,15 @@ class RaceSession:
             if command_vehicle and was_flying:
                 await self._controller.stop_offboard(source=SOURCE)
             return self._result(True, f"race aborted: {reason}")
+
+    async def shutdown(self, reason: str = "backend shutting down") -> None:
+        """Abort any race and stop the loop worker (first step of app shutdown)."""
+        try:
+            await self.abort(reason)
+        except Exception:
+            logger.exception("race abort during shutdown failed")
+        if self._worker is not None and self._worker.alive:
+            await (self._runtime or default_runtime()).stop_worker(self._worker.name)
 
     # -- faults (simulation rehearsal hooks) -----------------------------------
     def inject_fault(self, kind: str, duration_s: float, value: float | None = None, gate_id: str | None = None) -> str:
@@ -464,6 +509,8 @@ class RaceSession:
                 return
             tick_started = time.perf_counter()
             try:
+                if not self._renew_lease():
+                    return
                 await self._step_locked()
             finally:
                 elapsed_ms = (time.perf_counter() - tick_started) * 1000.0
@@ -471,6 +518,18 @@ class RaceSession:
                 self.stats.tick_ms_total += elapsed_ms
                 self.stats.max_tick_ms = max(self.stats.max_tick_ms, elapsed_ms)
                 self._flush_records()
+
+    def _renew_lease(self) -> bool:
+        """Prove (and extend) authority every tick; losing it ends the race."""
+        if self._lease is None:
+            return True
+        try:
+            self._lease = self._controller.authority.renew(self._lease, LEASE_TTL_S)
+            return True
+        except LeaseInvalid as exc:
+            self._lease = None
+            self._finish_state(RaceState.ABORTED, f"authority lost: {exc.reason}")
+            return False
 
     async def _step_locked(self) -> None:
         now = self._clock()
@@ -626,7 +685,9 @@ class RaceSession:
             self._prep_phase = "engage"
         if self._prep_phase == "engage":
             ned = enu_to_ned(position)
-            res = await controller.start_offboard(*ned, enu_yaw_deg_to_ned(local.yaw_enu_deg), source=SOURCE)
+            res = await controller.start_offboard(
+                *ned, enu_yaw_deg_to_ned(local.yaw_enu_deg), source=SOURCE, lease=self._lease
+            )
             if not res.accepted:
                 self._finish_state(RaceState.FAILED, f"could not enter offboard: {res.message}")
                 await controller.command("hold", source=SOURCE)
@@ -733,10 +794,17 @@ class RaceSession:
         await self._send(setpoint, now)
 
     async def _send(self, setpoint: OffboardSetpoint, now: float) -> None:
-        result = await self._controller.offboard_setpoint(setpoint, now=now)
+        if not self.active:
+            return
+        result = await self._controller.offboard_setpoint(setpoint, now=now, lease=self._lease)
         if result.accepted:
             self.stats.setpoints_sent += 1
             self._last_setpoint = setpoint
+            return
+        if result.message.startswith("authority:"):
+            # Whoever took authority (operator, failsafe) is commanding now.
+            self.stats.setpoints_rejected += 1
+            self._finish_state(RaceState.ABORTED, result.message)
             return
         if "expired" in result.message:
             self.stats.setpoints_expired += 1
@@ -770,6 +838,9 @@ class RaceSession:
         self._finished_at = self._clock()
         if self._loop is not None:
             self._loop.stop()
+        if self._lease is not None:
+            self._controller.authority.release(self._lease, f"race {state.value.lower()}")
+            self._lease = None
         event = {
             RaceState.COMPLETE: "race_completed",
             RaceState.ABORTED: "race_aborted",
@@ -894,4 +965,5 @@ class RaceSession:
             "stats": self.stats.to_dict(),
             "offboard": self._controller.offboard_stats,
             "last_setpoint": self._last_setpoint.to_dict() if self._last_setpoint else None,
+            "authority": self._lease.to_dict(self._controller.authority.now()) if self._lease else None,
         }
