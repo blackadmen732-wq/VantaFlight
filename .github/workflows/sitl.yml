@@ -1,0 +1,107 @@
+name: PX4 SITL
+
+# Flies VantaFlight against a real PX4 autopilot (v1.14.3) with Gazebo,
+# headless, on the runner. Two independent jobs, each with its own PX4:
+#   * vantarace: the vision-driven racing loop and its fault cases
+#   * mission:   the V1 waypoint mission / battery failsafe path
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PX4_IMAGE: jonasvautherin/px4-gazebo-headless:1.14.3
+  VANTAFLIGHT_PX4_TIMEOUT: "60"
+
+jobs:
+  vantarace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install backend + MAVSDK
+        run: python -m pip install -r backend/requirements-dev.txt -r backend/requirements-px4.txt
+      - name: Start PX4 SITL + Gazebo (headless)
+        run: |
+          docker pull "$PX4_IMAGE"
+          docker run -d --name px4 --network host "$PX4_IMAGE" 127.0.0.1 127.0.0.1
+      - name: Start the VantaFlight backend
+        working-directory: backend
+        run: |
+          VANTAFLIGHT_DB="$RUNNER_TEMP/vantaflight.db" nohup python -m uvicorn vantaflight.main:app \
+            --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/backend.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
+      - name: Wait for PX4 to be ready
+        run: |
+          # Gazebo + PX4 boot and EKF convergence take a while on a cold runner.
+          for i in $(seq 1 120); do
+            docker logs px4 2>&1 | grep -q "Ready for takeoff" && break
+            sleep 2
+          done
+          docker logs px4 2>&1 | tail -20
+      - name: VantaRace closed loop end-to-end
+        run: python simulation/px4/race_e2e.py --api http://127.0.0.1:8000 --json "$RUNNER_TEMP/vantarace-sitl.json"
+      - name: Collect logs
+        if: always()
+        run: docker logs px4 > "$RUNNER_TEMP/px4.log" 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vantarace-sitl
+          path: |
+            ${{ runner.temp }}/vantarace-sitl.json
+            ${{ runner.temp }}/backend.log
+            ${{ runner.temp }}/px4.log
+            ${{ runner.temp }}/vantaflight.db
+
+  mission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install backend + MAVSDK
+        run: python -m pip install -r backend/requirements-dev.txt -r backend/requirements-px4.txt
+      - name: Start PX4 SITL + Gazebo (headless)
+        run: |
+          docker pull "$PX4_IMAGE"
+          docker run -d --name px4 --network host "$PX4_IMAGE" 127.0.0.1 127.0.0.1
+      - name: Start the VantaFlight backend
+        working-directory: backend
+        run: |
+          VANTAFLIGHT_DB="$RUNNER_TEMP/vantaflight.db" nohup python -m uvicorn vantaflight.main:app \
+            --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/backend.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
+      - name: Wait for PX4 to be ready
+        run: |
+          for i in $(seq 1 120); do
+            docker logs px4 2>&1 | grep -q "Ready for takeoff" && break
+            sleep 2
+          done
+      - name: Mission + battery failsafe end-to-end
+        run: python simulation/px4/e2e_flight.py --api http://127.0.0.1:8000 | tee "$RUNNER_TEMP/mission-sitl.jsonl"
+      - name: Collect logs
+        if: always()
+        run: docker logs px4 > "$RUNNER_TEMP/px4.log" 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mission-sitl
+          path: |
+            ${{ runner.temp }}/mission-sitl.jsonl
+            ${{ runner.temp }}/backend.log
+            ${{ runner.temp }}/px4.log

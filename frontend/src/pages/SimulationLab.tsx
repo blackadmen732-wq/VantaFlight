@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Capabilities, DiscoveredDrone } from "../types";
 import DiagnosticsPanel from "../components/DiagnosticsPanel";
+import FaultInjectionPanel from "../components/FaultInjectionPanel";
 
 interface Props {
   wsConnected: boolean;
@@ -69,6 +70,12 @@ export default function SimulationLab({ wsConnected }: Props) {
           </div>
         </section>
       )}
+
+      <section className="sim-section">
+        <FaultInjectionPanel
+          enabled={caps?.supported_capabilities.includes("fault_injection") ?? false}
+        />
+      </section>
 
       <section className="sim-section">
         <DiagnosticsPanel wsConnected={wsConnected} />

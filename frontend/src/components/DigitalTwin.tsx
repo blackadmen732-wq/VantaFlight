@@ -1,12 +1,35 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import type { TwinState } from "../types";
+import type { AirspaceZone, MissionPlan, TwinState } from "../types";
 
 interface Props {
   twin: TwinState | null;
+  /** Mission to draw: waypoints and the planned path. */
+  plan?: MissionPlan | null;
+  /** Index of the waypoint currently being flown to (highlighted). */
+  activeWaypoint?: number | null;
+  /** No-fly zones, drawn as red columns. */
+  zones?: AirspaceZone[];
 }
 
-export default function DigitalTwin({ twin }: Props) {
+/** Height of the drawn no-fly columns, in metres. */
+const ZONE_HEIGHT_M = 30;
+const NO_ZONES: AirspaceZone[] = [];
+
+/** World metres -> scene units. */
+const SCALE = 0.5;
+
+/** Local ENU (east, north, up) -> three.js (x, y-up, z). */
+function toScene(x: number, y: number, altitude: number): [number, number, number] {
+  return [x * SCALE, altitude * SCALE, y * SCALE];
+}
+
+export default function DigitalTwin({
+  twin,
+  plan = null,
+  activeWaypoint = null,
+  zones = NO_ZONES,
+}: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef({
     scene: null as THREE.Scene | null,
@@ -15,6 +38,8 @@ export default function DigitalTwin({ twin }: Props) {
     drone: null as THREE.Group | null,
     trail: null as THREE.Line | null,
     groundGrid: null as THREE.GridHelper | null,
+    missionGroup: null as THREE.Group | null,
+    zoneGroup: null as THREE.Group | null,
     animId: 0,
   });
 
@@ -60,7 +85,14 @@ export default function DigitalTwin({ twin }: Props) {
     const trail = new THREE.Line(trailGeometry, trailMaterial);
     scene.add(trail);
 
+    const missionGroup = new THREE.Group();
+    scene.add(missionGroup);
+    const zoneGroup = new THREE.Group();
+    scene.add(zoneGroup);
+
     const s = stateRef.current;
+    s.missionGroup = missionGroup;
+    s.zoneGroup = zoneGroup;
     s.scene = scene;
     s.camera = camera;
     s.renderer = renderer;
@@ -102,7 +134,7 @@ export default function DigitalTwin({ twin }: Props) {
     const s = stateRef.current;
     if (!s.drone || !twin) return;
 
-    s.drone.position.set(twin.x * 0.5, twin.altitude * 0.5, twin.y * 0.5);
+    s.drone.position.set(...toScene(twin.x, twin.y, twin.altitude));
     s.drone.rotation.y = THREE.MathUtils.degToRad(-twin.heading);
 
     if (twin.armed) {
@@ -119,17 +151,89 @@ export default function DigitalTwin({ twin }: Props) {
       const count = Math.min(twin.trajectory.length, 100);
       for (let i = 0; i < count; i++) {
         const p = twin.trajectory[twin.trajectory.length - count + i];
-        positions.setXYZ(i, p.x * 0.5, p.z * 0.5, p.y * 0.5);
+        positions.setXYZ(i, ...toScene(p.x, p.y, p.z));
       }
       positions.needsUpdate = true;
       geo.setDrawRange(0, count);
     }
 
     if (s.camera) {
-      const target = new THREE.Vector3(twin.x * 0.5, twin.altitude * 0.5, twin.y * 0.5);
+      const target = new THREE.Vector3(...toScene(twin.x, twin.y, twin.altitude));
       s.camera.lookAt(target);
     }
   }, [twin]);
+
+  // Mission overlay: rebuilt only when the plan or active waypoint changes.
+  useEffect(() => {
+    const { missionGroup: group, camera } = stateRef.current;
+    if (!group) return;
+    disposeChildren(group);
+    if (!plan || plan.waypoints.length === 0) return;
+
+    // Pull the camera back far enough to see the whole plan.
+    const extent = Math.max(
+      ...plan.waypoints.map((w) => Math.max(Math.abs(w.x), Math.abs(w.y), w.altitude) * SCALE),
+    );
+    const reach = Math.max(8, extent * 1.6);
+    camera?.position.set(reach, Math.max(6, reach * 0.75), reach);
+    // Push the fog back with the camera so large routes stay visible.
+    const fog = stateRef.current.scene?.fog;
+    if (fog instanceof THREE.Fog) {
+      fog.near = Math.max(40, reach * 1.5);
+      fog.far = Math.max(80, reach * 4);
+    }
+    if (camera) {
+      camera.far = Math.max(200, reach * 6);
+      camera.updateProjectionMatrix();
+    }
+
+    const points = [toScene(0, 0, 0), ...plan.waypoints.map((w) => toScene(w.x, w.y, w.altitude))];
+    const pathGeo = new THREE.BufferGeometry();
+    pathGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points.flat()), 3));
+    const path = new THREE.Line(
+      pathGeo,
+      new THREE.LineBasicMaterial({ color: 0xf5a623, opacity: 0.7, transparent: true }),
+    );
+    group.add(path);
+
+    plan.waypoints.forEach((w, i) => {
+      const active = i === activeWaypoint;
+      const via = w.kind === "via";
+      const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(active ? 0.28 : via ? 0.1 : 0.18, 12, 12),
+        new THREE.MeshBasicMaterial({ color: active ? 0x2ecc71 : via ? 0x8b98a9 : 0xf5a623 }),
+      );
+      marker.position.set(...toScene(w.x, w.y, w.altitude));
+      group.add(marker);
+    });
+  }, [plan, activeWaypoint]);
+
+  // No-fly zones: translucent red columns over each zone's footprint.
+  useEffect(() => {
+    const group = stateRef.current.zoneGroup;
+    if (!group) return;
+    disposeChildren(group);
+    const height = ZONE_HEIGHT_M * SCALE;
+    for (const zone of zones) {
+      const shape = new THREE.Shape(
+        zone.vertices.map(([x, y]) => new THREE.Vector2(x * SCALE, y * SCALE)),
+      );
+      const column = new THREE.Mesh(
+        new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false }),
+        new THREE.MeshBasicMaterial({
+          color: 0xff5c5c,
+          opacity: 0.22,
+          transparent: true,
+          depthWrite: false,
+        }),
+      );
+      // Shape lies in x/y; stand it up so y (north) maps to scene z and the
+      // extrusion rises from the ground.
+      column.rotation.x = Math.PI / 2;
+      column.position.y = height;
+      group.add(column);
+    }
+  }, [zones]);
 
   return (
     <div className="digital-twin-panel">
@@ -152,6 +256,18 @@ export default function DigitalTwin({ twin }: Props) {
       )}
     </div>
   );
+}
+
+function disposeChildren(group: THREE.Group): void {
+  for (const child of [...group.children]) {
+    group.remove(child);
+    if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+      child.geometry?.dispose();
+      const mat = child.material;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat?.dispose();
+    }
+  }
 }
 
 function createDroneModel(): THREE.Group {

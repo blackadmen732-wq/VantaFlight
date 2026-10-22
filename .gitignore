@@ -23,3 +23,5 @@ frontend/src-tauri/gen/
 .DS_Store
 .idea/
 .vscode/
+vantaflight-offline/
+vantaflight-offline-*.tar.gz

@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from ..adapters import DroneAdapter, MockDroneAdapter, PX4SITLAdapter
+from ..adapters import DroneAdapter, HopperAdapter, MockDroneAdapter, PX4SITLAdapter, TelloAdapter, TelloConfig
+from ..adapters.hopper import HopperConfig
 from ..config import PX4_SITL_URL
 from ..mavlink import MAVLinkConfig
-from ..models import AdapterType
+from ..models import AdapterType, Capabilities
 
 
 class TransportType(str, Enum):
@@ -18,6 +19,9 @@ class TransportType(str, Enum):
     RADIO = "RADIO"
     UDP = "UDP"
     TCP = "TCP"
+    HOPPER_WIFI = "HOPPER_WIFI"
+    HOPPER_BLE = "HOPPER_BLE"
+    TELLO_WIFI = "TELLO_WIFI"
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,20 @@ _BUILTIN_SOURCES = [
         address=PX4_SITL_URL,
         adapter_type=AdapterType.PX4_SITL,
     ),
+    DiscoveredDrone(
+        drone_id="hopper-0",
+        name="FTW Robotics Hopper",
+        transport=TransportType.HOPPER_WIFI,
+        address="http://192.168.2.1",
+        adapter_type=AdapterType.HOPPER,
+    ),
+    DiscoveredDrone(
+        drone_id="tello-0",
+        name="DJI/Ryze Tello (join its TELLO-XXXXXX Wi-Fi)",
+        transport=TransportType.TELLO_WIFI,
+        address="udp://192.168.10.1:8889",
+        adapter_type=AdapterType.TELLO,
+    ),
 ]
 
 
@@ -69,9 +87,20 @@ class ConnectionManager:
         if drone.adapter_type == AdapterType.PX4_SITL or drone.transport == TransportType.PX4_SITL:
             cfg = MAVLinkConfig(system_address=drone.address)
             return PX4SITLAdapter(adapter_id=drone.drone_id, config=cfg)
-        raise NotImplementedError(
-            f"transport {drone.transport.value} is not supported yet"
-        )
+        if drone.adapter_type == AdapterType.HOPPER or drone.transport in (
+            TransportType.HOPPER_WIFI,
+            TransportType.HOPPER_BLE,
+        ):
+            cfg = HopperConfig(adapter_id=drone.drone_id)
+            cfg.camera.base_url = drone.address
+            return HopperAdapter(config=cfg)
+        if drone.adapter_type == AdapterType.TELLO or drone.transport == TransportType.TELLO_WIFI:
+            return TelloAdapter(adapter_id=drone.drone_id, config=TelloConfig())
+        raise NotImplementedError(f"transport {drone.transport.value} is not supported yet")
+
+    def capabilities_for(self, drone: DiscoveredDrone) -> Capabilities:
+        """Describe a discovered drone without connecting to it."""
+        return self._build_adapter(drone).get_capabilities()
 
     async def connect(self, drone: DiscoveredDrone | None = None) -> DroneAdapter:
         if drone is None:
